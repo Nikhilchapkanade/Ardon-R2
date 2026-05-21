@@ -1,0 +1,23 @@
+# Windows: set 64MB stack size in the PE header
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-args=/STACK:67108864"]
+
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "link-args=/STACK:67108864"]
+
+# macOS Intel and Apple Silicon: 64MB stack via the macOS linker.
+# Default macOS main-thread stack is 8MB which is usually fine, but the
+# JIT's recursive IR lowering can spike past it on deep expressions.
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-args=-Wl,-stack_size,0x4000000"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-args=-Wl,-stack_size,0x4000000"]
+
+# Linux x86_64 and ARM64: the linker takes a different flag, and the
+# default user-stack soft limit (typically 8MB) is set by the kernel
+# rlimit, not the binary. Setting RUST_MIN_STACK at runtime is the
+# preferred path; no link-time stack-size flag is required.
+# (Block kept commented as a reminder.)
+# [target.x86_64-unknown-linux-gnu]
+# [target.aarch64-unknown-linux-gnu]

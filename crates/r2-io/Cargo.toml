@@ -1,0 +1,7 @@
+[package]
+name = "r2-io"
+version = "0.1.1"
+edition = "2021"
+
+[dependencies]
+r2-types = { path = "../r2-types" }

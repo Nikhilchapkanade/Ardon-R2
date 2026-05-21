@@ -1,0 +1,10 @@
+[package]
+name = "r2-types"
+version = "0.1.1"
+edition = "2021"
+description = "Core data types for the Ardon-R2 statistical computing language"
+
+[dependencies]
+thiserror.workspace = true
+r2-linalg = { path = "../r2-linalg" }
+r2-arrow = { path = "../r2-arrow" }

@@ -1,0 +1,9 @@
+[package]
+name = "r2-parser"
+version = "0.1.1"
+edition = "2021"
+description = "Lexer and parser for the Ardon-R2 language"
+
+[dependencies]
+r2-types = { path = "../r2-types" }
+thiserror.workspace = true

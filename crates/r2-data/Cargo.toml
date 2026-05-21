@@ -1,0 +1,11 @@
+[package]
+name = "r2-data"
+version = "0.1.1"
+edition = "2021"
+license = "AGPL-3.0"
+description = "Ardon-R2 data-handling domain crate (Phase R.2) — c, cbind, rbind, filter, select, mutate, arrange, summary, apply family."
+
+[dependencies]
+r2-types  = { path = "../r2-types" }
+r2-kernel = { path = "../r2-kernel" }
+r2-oracle = { path = "../r2-oracle" }

@@ -1,0 +1,15 @@
+[package]
+name = "r2-arrow"
+version = "0.1.1"
+edition = "2021"
+license = "AGPL-3.0"
+description = "Ardon-R2 columnar memory substrate (Phase F — Apache Arrow-compatible buffers)"
+
+[features]
+default = ["mmap"]
+# Enable `MmapColumnar` for memory-mapped column reads. Pure-Rust dep
+# (memmap2) ~10 KB compiled. Off → no mmap support.
+mmap = ["dep:memmap2"]
+
+[dependencies]
+memmap2 = { version = "0.9", optional = true }

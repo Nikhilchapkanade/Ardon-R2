@@ -1,0 +1,17 @@
+[package]
+name = "r2-jit"
+version = "0.1.1"
+edition = "2021"
+license = "AGPL-3.0"
+description = "Ardon-R2 native-code JIT via Cranelift (Phase C)"
+
+[dependencies]
+r2-types = { path = "../r2-types" }
+r2-ir    = { path = "../r2-ir" }
+
+# Pure-Rust JIT — honours §4.5 (no C/C++ deps).
+cranelift          = "0.105"
+cranelift-jit      = "0.105"
+cranelift-module   = "0.105"
+cranelift-codegen  = "0.105"
+cranelift-frontend = "0.105"

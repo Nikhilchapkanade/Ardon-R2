@@ -1,0 +1,22 @@
+[package]
+name = "r2-engine"
+version = "0.1.1"
+edition = "2021"
+[dependencies]
+r2-types = { path = "../r2-types" }
+r2-memory = { path = "../r2-memory" }
+r2-base = { path = "../r2-base" }
+r2-parser = { path = "../r2-parser" }
+r2-linalg = { path = "../r2-linalg" }
+r2-ir = { path = "../r2-ir" }
+r2-jit = { path = "../r2-jit" }
+r2-oracle = { path = "../r2-oracle" }
+r2-arrow = { path = "../r2-arrow" }
+r2-kernel = { path = "../r2-kernel" }
+r2-stats = { path = "../r2-stats" }
+r2-ml = { path = "../r2-ml" }
+r2-data = { path = "../r2-data" }
+r2-graphics = { path = "../r2-graphics" }
+r2-strings = { path = "../r2-strings" }
+r2-io = { path = "../r2-io" }
+rayon = "1.10"

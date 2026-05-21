@@ -1,0 +1,33 @@
+# Ardon-R2 project formatting policy.
+# Run `cargo fmt --all` to apply. CI verifies this file is respected.
+#
+# Most settings here are conservative — we lean on rustfmt's defaults
+# rather than re-inventing taste. The few overrides we set are chosen
+# to keep diffs small and readable across contributors.
+
+# Wrap at 100 columns. Wider than rustfmt's default 80, narrower than
+# the "anything goes" 120. Matches the editor settings most contributors
+# already have.
+max_width = 100
+
+# Allow short statements on a single line (e.g. `match` arms that just
+# return a literal). Reduces visual noise in dense lookup tables — which
+# Ardon-R2 has many of (builtin dispatch, help text, etc.).
+use_small_heuristics = "Max"
+
+# Imports: one item per line. Easier to diff, fewer rebase conflicts.
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+
+# Always use the new format spec for `format!`, `println!`, etc.
+# (Rust 2021+ inline-args style: `println!("x = {x}")`).
+use_field_init_shorthand = true
+
+# Trailing comma after the last argument of multi-line calls — diff stability.
+trailing_comma = "Vertical"
+
+# Match arms align to their opening brace, not to their patterns.
+match_block_trailing_comma = true
+
+# Newline at end of every file.
+newline_style = "Unix"

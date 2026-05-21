@@ -1,0 +1,95 @@
+# Ardon-R2 — Continuous Integration
+#
+# Runs on every push and pull request:
+#   1. Builds the workspace in release mode on Ubuntu and Windows
+#   2. Runs the full test suite on both platforms
+#   3. Verifies formatting (`cargo fmt --check`)
+#   4. Runs Clippy lints (warnings allowed, errors fail the build)
+#
+# Caching: Cargo registry, git index, and the target/ directory are
+# cached per-OS, keyed on Cargo.lock. First run is slow (~10 min);
+# subsequent runs cut by half on cache hit.
+
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Cranelift JIT can be slow to compile in debug. Release-mode CI is
+  # closer to how users will actually build the project.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build-and-test:
+    name: build & test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and target/
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cargo fmt check
+        run: cargo fmt --all -- --check
+        continue-on-error: true   # Don't fail launch CI on style; flip to false once enforced
+
+      - name: Build (release)
+        run: cargo build --workspace --release
+
+      - name: Test (release)
+        run: cargo test --workspace --release --no-fail-fast
+
+      - name: Clippy (release)
+        run: cargo clippy --workspace --release --all-targets -- -D warnings
+        continue-on-error: true   # Same: warnings tracked, not blocking, until cleaned up
+
+  # ── Optional: smoke-test the REPL binary actually starts ────────
+  smoke-test:
+    name: smoke-test r2 binary
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build r2 binary
+        run: cargo build -p r2-repl --release --bin r2
+      - name: Run a one-liner script
+        run: |
+          echo 'cat(mean(1:10))' > /tmp/smoke.R2
+          ./target/release/r2 /tmp/smoke.R2

@@ -1,0 +1,9 @@
+[package]
+name = "r2-stats"
+version = "0.1.1"
+edition = "2021"
+[dependencies]
+r2-types  = { path = "../r2-types" }
+r2-kernel = { path = "../r2-kernel" }
+r2-linalg = { path = "../r2-linalg" }
+r2-memory = { path = "../r2-memory" }

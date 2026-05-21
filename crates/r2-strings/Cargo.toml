@@ -1,0 +1,21 @@
+[package]
+name = "r2-strings"
+version = "0.1.1"
+edition = "2021"
+
+[features]
+default = ["regex"]
+# Enable the `regex-lite` engine for `grep`/`grepl`/`gsub`/`sub`/`regexpr`.
+# Off → those builtins fall back to literal-substring matching (smaller
+# binary, no regex syntax support).
+regex = ["dep:regex-lite"]
+
+[dependencies]
+r2-types = { path = "../r2-types" }
+
+# Pure-Rust regex engine — no C/C++ deps, ~150 KB compiled. Smaller than
+# the full `regex` crate (which pulls in aho-corasick + unicode-tables).
+# Supports the POSIX-ERE subset R users expect: `^anchor$`, `[abc]`,
+# `(group)`, `\d`/`\w`/`\s`, `?*+{n,m}`, `|`, lookaround NOT supported
+# (also not in R's default extended-regex mode).
+regex-lite = { version = "0.1", optional = true }

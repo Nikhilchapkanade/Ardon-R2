@@ -1,0 +1,14 @@
+[package]
+name = "r2-ml"
+version = "0.1.1"
+edition = "2021"
+license = "AGPL-3.0"
+description = "Ardon-R2 machine-learning domain crate (Phase R.1) — rf, gbm, kmeans, rpart, knn, naive.bayes, cv, prcomp."
+
+[dependencies]
+r2-types  = { path = "../r2-types" }
+r2-kernel = { path = "../r2-kernel" }
+r2-stats  = { path = "../r2-stats" }
+r2-linalg = { path = "../r2-linalg" }
+r2-oracle = { path = "../r2-oracle" }
+rayon = "1.10"

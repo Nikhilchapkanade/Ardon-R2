@@ -1,0 +1,28 @@
+[workspace]
+license = "AGPL-3.0"
+resolver = "2"
+members = [
+    "crates/r2-types",
+    "crates/r2-ir",
+    "crates/r2-jit",
+    "crates/r2-oracle",
+    "crates/r2-arrow",
+    "crates/r2-kernel",
+    "crates/r2-ml",
+    "crates/r2-data",
+    "crates/r2-parser",
+    "crates/r2-memory",
+    "crates/r2-linalg",
+    "crates/r2-engine",
+    "crates/r2-base",
+    "crates/r2-stats",
+    "crates/r2-graphics",
+    "crates/r2-strings",
+    "crates/r2-io",
+    "crates/r2-utils",
+    "crates/r2-pkg",
+    "crates/r2-repl",
+]
+
+[workspace.dependencies]
+thiserror = "1"

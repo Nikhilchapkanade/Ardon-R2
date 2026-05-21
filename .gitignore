@@ -1,0 +1,137 @@
+# ─────────────────────────────────────────────────────────────────────
+# Ardon-R2 — repository .gitignore
+# ─────────────────────────────────────────────────────────────────────
+
+# Rust build artifacts
+/target/
+**/target/
+**/*.rs.bk
+
+# NOTE: Cargo.lock IS committed. R2 ships a binary (the `r2` REPL), so
+# the Rust convention is to commit Cargo.lock for reproducible builds
+# across CI and downstream users. Do not add it to this ignore list.
+
+# Compiled binaries and shared libs (only top-level outputs; crate-level
+# stays under target/ which is already ignored above)
+/*.exe
+/*.dll
+/*.so
+/*.dylib
+/*.pdb
+
+# ─── Local work artifacts (not for public source tree) ──────────────
+
+# Old v0.0.9 source preserved locally for reference, not for release
+R2sourcecode.0.0.9/
+R2sourcecode.0.0.9.7z
+R2sourcecode.*.7z
+
+# Benchmark output files from local runs
+out_R_*.txt
+out_R2_*.txt
+*.bench.txt
+build_output.txt
+
+# Local R-side scratch files (iris regeneration, ad-hoc R scripts)
+dump_*.R
+r_iris.txt
+*.rda.local
+
+# Ad-hoc working notes
+answer.md
+notes.md
+TODO.local.md
+scratch/
+
+# Plot/output files emitted by REPL sessions and tests
+out_*.svg
+out_*.png
+out_*.csv
+*.r2s
+
+# ─── Private design and roadmap documents (kept locally) ────────────
+
+docs/rustR2_ai_library.md
+docs/rustR2_stats_library.md
+docs/status_v*.md
+
+# Launch articles — drafts kept locally, not part of the public source
+articles/
+
+# ─── OS / editor / IDE clutter ──────────────────────────────────────
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# Vim / Emacs / nano
+*.swp
+*.swo
+*.swn
+*~
+\#*\#
+.\#*
+
+# JetBrains (IntelliJ, RustRover, CLion)
+.idea/
+*.iml
+
+# VSCode (uncomment if you don't want shared settings)
+# .vscode/
+
+# Sublime / Atom
+*.sublime-workspace
+*.sublime-project
+.atom/
+
+# ─── Security: never commit secrets ─────────────────────────────────
+
+# Cargo registry credentials (crates.io publish tokens)
+.cargo/credentials.toml
+.cargo/credentials
+
+# Generic dotenv / secret files
+.env
+.env.*
+!.env.example
+secrets.toml
+*.pem
+*.key
+
+# ─── CI / coverage / profiling artifacts ────────────────────────────
+
+# Coverage tools (grcov, tarpaulin)
+*.profraw
+*.profdata
+tarpaulin-report.html
+cobertura.xml
+lcov.info
+
+# Profiling
+perf.data
+perf.data.old
+flamegraph.svg
+*.heaptrack
+
+# ─── Python / R / misc local tooling (if used for benches) ──────────
+
+__pycache__/
+*.py[cod]
+.Rhistory
+.RData
+.Rapp.history

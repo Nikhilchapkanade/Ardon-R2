@@ -1,0 +1,13 @@
+[package]
+name = "r2-repl"
+version = "0.1.1"
+edition = "2021"
+
+[[bin]]
+name = "r2"
+path = "src/main.rs"
+
+[dependencies]
+r2-types = { path = "../r2-types" }
+r2-parser = { path = "../r2-parser" }
+r2-engine = { path = "../r2-engine" }

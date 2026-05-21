@@ -1,0 +1,11 @@
+[package]
+name = "r2-kernel"
+version = "0.1.1"
+edition = "2021"
+license = "AGPL-3.0"
+description = "Ardon-R2 backend-dispatched compute kernels (reduction, map, scan). Phase K."
+
+[dependencies]
+r2-oracle = { path = "../r2-oracle" }
+r2-memory = { path = "../r2-memory" }
+rayon = "1.10"

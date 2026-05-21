@@ -1,0 +1,6 @@
+[package]
+name = "r2-oracle"
+version = "0.1.1"
+edition = "2021"
+license = "AGPL-3.0"
+description = "Ardon-R2 auto-scheduler — chooses Serial / Rayon / (future) GPU / Cloud (Phase E V1)"

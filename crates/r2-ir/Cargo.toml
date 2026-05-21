@@ -1,0 +1,9 @@
+[package]
+name = "r2-ir"
+version = "0.1.1"
+edition = "2021"
+license = "AGPL-3.0"
+description = "Ardon-R2 typed-SSA intermediate representation (Phase B)"
+
+[dependencies]
+r2-types = { path = "../r2-types" }
