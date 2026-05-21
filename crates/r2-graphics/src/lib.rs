@@ -19,8 +19,11 @@
 use r2_types::{EvalArg, R2Err, RVal};
 use std::fmt::Write;
 
-pub mod plots;
+pub mod device;
 pub mod overlays;
+pub mod params;
+pub mod plots;
+pub mod server;
 
 // ─────────────────────────────────────────────────────────────────────
 // Shared internal helpers (scope: this crate only).
@@ -126,13 +129,19 @@ pub fn hist_svg(values: &[f64], bins: usize, cfg: &PlotConfig) -> String {
 /// (split-handler pattern), then falls through to `plots::bi_plot`.
 pub fn register_builtins() -> Vec<(&'static str, fn(&[EvalArg]) -> Result<RVal, R2Err>)> {
     vec![
-        ("plot",    plots::bi_plot),
-        ("hist",    plots::bi_hist),
-        ("boxplot", plots::bi_boxplot),
-        ("barplot", plots::bi_barplot),
-        ("lines",   overlays::bi_lines),
-        ("points",  overlays::bi_points),
-        ("abline",  overlays::bi_abline),
-        ("legend",  overlays::bi_legend),
+        ("plot",      plots::bi_plot),
+        ("hist",      plots::bi_hist),
+        ("boxplot",   plots::bi_boxplot),
+        ("barplot",   plots::bi_barplot),
+        ("lines",     overlays::bi_lines),
+        ("points",    overlays::bi_points),
+        ("abline",    overlays::bi_abline),
+        ("legend",    overlays::bi_legend),
+        // Phase R.G — explicit device controls.
+        ("par",       params::bi_par),
+        ("dev.off",   params::bi_dev_off),
+        ("save_plot", params::bi_save_plot),
+        // Phase R.G.2 — built-in HTTP plot viewer.
+        ("dev.view",  params::bi_dev_view),
     ]
 }

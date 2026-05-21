@@ -99,13 +99,16 @@ cargo build --release
 
 ## Features at a Glance
 
-- **192 built-in functions** — no packages to install
+- **197 built-in functions** — no packages to install
 - **12 ML algorithms** — decision tree, random forest, gradient boosting, KNN, PCA, K-means, Naive Bayes
-- **Formula syntax** — `lm(mpg ~ wt + hp, data = mtcars)`
+- **Formula syntax with factor expansion** — `lm(mpg ~ factor(cyl) + wt, data = mtcars)`
+- **In-memory graphics device + full `par()`** — `par(mfrow=c(2,2))` multi-panel layouts, `dev.off()`, `save_plot(path)`
+- **Built-in browser-based plot viewer** — `dev.view()` opens a live, auto-refreshing page with a session gallery of every plot you've made
 - **2.2x faster** matrix multiply than R (Windows default BLAS)
-- **5MB binary** — runs on any laptop, no cloud needed
+- **6.6MB binary** — runs on any laptop, no cloud needed
 - **R-compatible syntax** — `<-` assignment, 1-based indexing, `$` column access
-- **Pure Rust math kernel — 1,278 lines, Rust-only dependencies, no C/C++
+- **Pure Rust math kernel** — Rust-only dependencies, no C/C++
+- **Cross-platform** — Linux, Windows, macOS (Intel and Apple Silicon)
 
 ## Statistics
 
@@ -130,6 +133,48 @@ knn(train, test, labels, k = 5)                # KNN
 cv(x, y, model = "lm", k = 5)                 # Cross-validation
 confusion.matrix(predicted, actual)            # Evaluation
 ```
+
+## Plotting
+
+```r
+# Open the browser-based live viewer (auto-refreshes as you plot)
+dev.view()
+
+# Single plot
+plot(iris$Sepal.Length, iris$Sepal.Width, main = "Iris", col = "blue")
+abline(h = mean(iris$Sepal.Width), col = "red", lty = 2)
+
+# Multi-panel layout via par(mfrow=...)
+par(mfrow = c(2, 2))
+plot(iris$Sepal.Length, iris$Sepal.Width)
+hist(iris$Petal.Length)
+boxplot(iris$Petal.Width)
+barplot(table(iris$Species))
+save_plot("iris-overview.svg")   # explicit flush
+dev.off()                        # reset device
+```
+
+Plots draw into a thread-local in-memory graphics device. `par()`
+supports `mfrow`, `mfcol`, `mar`, `cex`, `col`, `lty`, `lwd`, `pch`,
+and the rest of the common CRAN R parameters. Use `oldpar <- par(...)`
+and `par(oldpar)` for save-and-restore semantics.
+
+`dev.view()` starts a tiny built-in HTTP server (zero external
+dependencies) and opens your default browser at
+`http://127.0.0.1:8765/`. The page shows the current plot at the top
+(auto-refreshes every 1.5 s) and a session gallery of every `.svg`
+file in your working directory underneath. Click any thumbnail to pin
+the top pane to that file; click "return to live" to resume polling.
+
+Try `samples/demo_graphics.r` for a walk-through:
+
+```bash
+./target/release/r2 samples/demo_graphics.r
+```
+
+The demo is interactive — each plot waits for you to inspect it,
+prompts for a save filename (or default), and pauses for Enter before
+moving on.
 
 ## What's new in v0.1.0
 

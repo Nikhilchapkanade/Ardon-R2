@@ -424,6 +424,104 @@ Element-wise vector kernels (add/sub/mul/div) on columnar buffers. mmap-backed
 columns for big files. i32/i64/bool/Utf8 dtypes. Independent of K/R/F.3
 ordering after they land.
 
+### Phase R.M — Cranelift JIT aarch64 gate ✅ shipped (v0.1.1)
+
+`r2-jit` now exposes `pub const JIT_SUPPORTED: bool = cfg!(target_arch
+= "x86_64")` and `try_compile_closure()` returns `None` immediately on
+unsupported targets. The engine cleanly falls back to the interpreter
+on aarch64-apple-darwin and aarch64-unknown-linux without ever reaching
+`JITModule::new()`, which panics on aarch64 in `cranelift-jit 0.105`
+during PLT construction.
+
+The JIT test module is gated by `#[cfg(all(test, target_arch =
+"x86_64"))]` so CI on Apple Silicon hosts is clean. Statistical
+outputs are bit-identical across architectures — only wall-clock
+performance differs on aarch64 for compute-bound workloads. Lifting
+the gate is a v0.2.0 task (upgrade `cranelift-jit` to a version with
+aarch64 PLT support, absorb the API churn).
+
+### Phase R.G — In-memory `PlotDevice` + full `par()` ✅ shipped (v0.1.1)
+
+`r2-graphics` re-architected around a thread-local `PlotDevice`
+(`crates/r2-graphics/src/device.rs`) holding the SVG body, canvas
+geometry, full `PlotParams`, and a multi-panel cursor. Replaces the
+old file-state model (which detected "is a plot open" by reading
+`plot.svg` from cwd) — that model was racy under cargo's parallel
+test execution and limited the crate to a single plot at a time.
+
+Three new builtins ship in this phase:
+
+- **`par(...)`** — three call shapes (`par()` snapshot, `par("name")`
+  query, `par(name=value, ...)` setter with previous-value return for
+  `oldpar <- par(...)` restore). Supports `mfrow`, `mfcol`, `mar`,
+  `oma`, `cex`, `cex.axis`, `cex.lab`, `cex.main`, `col`, `bg`, `fg`,
+  `lty`, `lwd`, `pch`, `las`, `new`. Defaults match CRAN R 4.5.x.
+- **`dev.off()`** — close the current device, reset to defaults.
+- **`save_plot(path)`** — explicitly flush the device SVG to a file
+  (useful for multi-panel canvases or non-default filenames).
+
+Multi-panel `mfrow=c(2,2)` / `mfcol=c(2,3)` is implemented end-to-end:
+`begin_plot()` returns the rectangle for the current panel and advances
+the cursor for the next call, with row-major or column-major fill
+chosen by `mfrow` vs. `mfcol`. The cursor wraps cleanly when overflowed.
+
+The auto-flush legacy UX is preserved — each `plot()` / `hist()` /
+`boxplot()` / `barplot()` still writes its default file (`plot.svg`,
+`hist.svg`, etc.) at the end of the call.
+
+The previously-flaky `lines_errs_when_no_plot_open` test is no longer
+ignored. It now relies on the device's in-memory `has_plot` flag
+instead of filesystem state and passes deterministically on every
+platform, independent of cargo's test-parallelism order.
+
+### Phase R.G.2 — Built-in HTTP plot viewer with session gallery ✅ shipped (v0.1.1)
+
+`crates/r2-graphics/src/server.rs` (~290 LoC, `std::net` only — zero
+external dependencies). `dev.view()` starts a tiny HTTP server on
+`127.0.0.1:8765` (scans `8765..8775` if the first port is in use) and
+opens the user's default browser via per-OS shell-out (`cmd /c start`,
+`open`, `xdg-open`). The server thread is started lazily on first
+call, guarded by `OnceLock` so repeat calls are idempotent.
+
+Endpoints:
+
+| Path | Behavior |
+|---|---|
+| `GET /` | Self-contained HTML page with two panes (no CSS/JS deps) |
+| `GET /current.svg` | Most recently modified `.svg` in cwd — what the live pane polls |
+| `GET /list` | JSON `[{name, mtime}]` of every `.svg` in cwd, newest first |
+| `GET /<name>.svg` | Any `.svg` in cwd by name (path-traversal guarded) |
+
+The HTML page is a two-pane layout:
+
+- **Current** — auto-refreshing `<img>` polling `/current.svg` every
+  1500 ms via a JavaScript probe-then-swap pattern (avoids the
+  visible flicker of a full `<img>.src` reset on each tick).
+- **Session gallery** — grid of thumbnails for every `.svg` in cwd,
+  rebuilt every 2 s from `/list`. Each thumbnail is clickable to pin
+  the top pane to that file. A "return to live" link resumes polling.
+  Closes the UX gap from R.G where users felt earlier plots had
+  "vanished" — they were always on disk, but the viewer previously
+  only displayed `/current.svg`.
+
+A general-purpose **`readline(prompt="")`** builtin was added to
+`r2-engine` so scripts can pause for stdin input. Returns the typed
+line as a character scalar (trimmed of trailing newline). Used by
+`samples/demo_graphics.r` for the interactive walk-through.
+
+Limitations of v0.1.1:
+
+- The server thread is a daemon. In script mode the process exits
+  when the script returns, killing the server. Scripts that use
+  `dev.view()` should end with `readline()` or `Sys.sleep()` to keep
+  the process alive while the browser is in use. REPL mode keeps the
+  process alive naturally.
+- Browser polls every 1.5 s — fine for interactive use, not animation.
+- No native window. A real GUI window via `winit` + `tiny-skia` would
+  be a separate phase; cost ~1000–2000 LoC. Path 3 ("HTTP server +
+  browser") was chosen for v0.1.1 because it gives 80% of the felt
+  UX for 10% of the work.
+
 ### Phase G — GPU dispatcher *(via wgpu)*, FFI Hub, Cloud RAM
 Deferred. Becomes a new Backend impl in the kernel trait — Phase K's
 abstraction makes adding GPU surface-only work, no builtin changes.

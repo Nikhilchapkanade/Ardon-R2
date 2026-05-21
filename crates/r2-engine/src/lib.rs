@@ -267,7 +267,7 @@ impl Engine {
             ("data",bi_data),
             // row/col operations
             ("rowSums",bi_rowSums),("colSums",bi_colSums),("rowMeans",bi_rowMeans),("colMeans",bi_colMeans),
-            ("set.seed",bi_set_seed),("Sys.sleep",bi_Sys_sleep),
+            ("set.seed",bi_set_seed),("Sys.sleep",bi_Sys_sleep),("readline",bi_readline),
         ]));
         e.registry.add_layer(mkpkg("stats", PackageTier::Base, vec![
             ("sum",bi_sum),("mean",bi_mean),("sd",bi_sd),("var",bi_var),("cor",bi_cor),("cov",bi_cov),
@@ -290,6 +290,7 @@ impl Engine {
         e.registry.add_layer(mkpkg("graphics", PackageTier::Base, vec![
             ("plot",bi_plot),("hist",bi_hist),("boxplot",bi_boxplot),("barplot",bi_barplot),
             ("lines",bi_lines),("points",bi_points),("abline",bi_abline),("legend",bi_legend),
+            ("par",bi_par),("dev.off",bi_dev_off),("save_plot",bi_save_plot),("dev.view",bi_dev_view),
         ]));
         e.registry.add_layer(mkpkg("utils", PackageTier::Base, vec![
             ("head",bi_head),("tail",bi_tail),("str",bi_str),
@@ -2692,7 +2693,7 @@ fn try_reload_base(e: &mut Engine, name: &str) -> bool {
                 ("dim",bi_dim),("colnames",bi_colnames),("rownames",bi_rownames),
                 ("data",bi_data),
                 ("rowSums",bi_rowSums),("colSums",bi_colSums),("rowMeans",bi_rowMeans),("colMeans",bi_colMeans),
-                ("set.seed",bi_set_seed),("Sys.sleep",bi_Sys_sleep),
+                ("set.seed",bi_set_seed),("Sys.sleep",bi_Sys_sleep),("readline",bi_readline),
             ]));
             true
         }
@@ -2716,6 +2717,7 @@ fn try_reload_base(e: &mut Engine, name: &str) -> bool {
             e.registry.add_layer(mkpkg("graphics", PackageTier::Base, vec![
                 ("plot",bi_plot),("hist",bi_hist),("boxplot",bi_boxplot),("barplot",bi_barplot),
                 ("lines",bi_lines),("points",bi_points),("abline",bi_abline),("legend",bi_legend),
+                ("par",bi_par),("dev.off",bi_dev_off),("save_plot",bi_save_plot),("dev.view",bi_dev_view),
             ]));
             true
         }
@@ -3899,6 +3901,20 @@ fn bi_legend(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> 
     r2_graphics::overlays::bi_legend(a)
 }
 
+// Phase R.G — graphical-parameter and device-control builtins.
+fn bi_par(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_graphics::params::bi_par(a)
+}
+fn bi_dev_off(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_graphics::params::bi_dev_off(a)
+}
+fn bi_save_plot(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_graphics::params::bi_save_plot(a)
+}
+fn bi_dev_view(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_graphics::params::bi_dev_view(a)
+}
+
 #[cfg(any())]
 #[allow(dead_code, unused_variables)]
 fn _legacy_bi_legend(_: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
@@ -4219,6 +4235,33 @@ fn bi_Sys_sleep(_: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err
     let secs = match &gv(a,0) { RVal::Numeric(v,_) => v[0].unwrap_or(0.0), _ => 0.0 };
     std::thread::sleep(std::time::Duration::from_secs_f64(secs));
     Ok(RVal::Null)
+}
+
+/// `readline(prompt="")` — blocks until the user types a line on stdin
+/// and presses Enter. Returns the line as a character scalar (without
+/// the trailing newline). The prompt, if provided, is printed first.
+/// Used for interactive prompts in scripts ("press Enter to continue",
+/// "type a filename:", etc.).
+fn bi_readline(_: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    use std::io::{BufRead, Write};
+    let prompt = gv(a, 0);
+    let prompt_str = match &prompt {
+        RVal::Character(v, _) => v.first().and_then(|x| x.as_ref()).map(|s| s.to_string()).unwrap_or_default(),
+        RVal::Null => String::new(),
+        other => val_to_str(other),
+    };
+    if !prompt_str.is_empty() {
+        print!("{}", prompt_str);
+        let _ = std::io::stdout().flush();
+    }
+    let mut line = String::new();
+    let stdin = std::io::stdin();
+    let _ = stdin.lock().read_line(&mut line);
+    let trimmed = line.trim_end_matches(|c| c == '\n' || c == '\r').to_string();
+    Ok(RVal::Character(
+        vec![Some(std::sync::Arc::from(trimmed.as_str()))],
+        Attrs::default(),
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════════════════

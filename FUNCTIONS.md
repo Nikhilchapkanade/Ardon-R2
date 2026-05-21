@@ -1,4 +1,4 @@
-# R2 Function Reference — 192 Built-in Functions
+# Ardon-R2 Function Reference — 197 Built-in Functions
 
 ## Core (25)
 ```
@@ -157,17 +157,34 @@ file.exists(path)   Check if file exists
 list.files(path)    List directory
 ```
 
-## Graphics (8)
+## Graphics (12)
 ```
-plot(x,y)     Scatter plot (SVG)
-hist(x)       Histogram
-boxplot(x)    Box-and-whisker
-barplot(x)    Bar chart
-lines(x,y)    Add lines to plot
-points(x,y)   Add points
-abline(a,b)   Add reference line
-legend(...)   Add legend
+plot(x,y)         Scatter plot (SVG, draws into in-memory device)
+hist(x)           Histogram
+boxplot(x)        Box-and-whisker
+barplot(x)        Bar chart
+lines(x,y)        Add lines to plot (errors if no plot is open)
+points(x,y)       Add points
+abline(a,b)       Add reference line (also abline(h=) / abline(v=))
+legend(...)       Add legend
+par(...)          Get or set graphical parameters
+                  par() — return all current params as a named list
+                  par("col") — return single param
+                  par(col="red", lwd=2) — set; returns previous values
+                  par(mfrow=c(2,2)) — enable 2x2 multi-panel layout
+                  par(mfcol=c(2,3)) — column-major multi-panel layout
+                  oldpar <- par(cex=1.5); par(oldpar)  # save/restore
+dev.off()         Close current graphics device (reset to defaults)
+dev.view()        Start the built-in HTTP plot viewer and open browser
+                  at http://127.0.0.1:8765/ . Two-pane layout: live
+                  current plot at top, session gallery below. Click any
+                  gallery thumbnail to pin the top pane to that file.
+save_plot(path)   Explicitly flush the current device's SVG to a file
 ```
+
+Supported `par()` parameters: `mfrow`, `mfcol`, `mar`, `oma`, `cex`,
+`cex.axis`, `cex.lab`, `cex.main`, `col`, `bg`, `fg`, `lty`, `lwd`,
+`pch`, `las`, `new`. Defaults match CRAN R 4.5.x.
 
 ## Model Functions (6)
 ```
@@ -179,20 +196,25 @@ summary(model)          Model summary (auto-dispatch)
 plot(model)             Model diagnostic plot (auto-dispatch)
 ```
 
-## System (12)
+## System (13)
 ```
 library(pkg)        Load package
 detach(pkg)         Unload package
 require(pkg)        Try to load package
 search()            Search path
 help(topic)         Help on topic (also ?topic, ??topic)
-version()           R2 version info
+version()           Ardon-R2 version info
 getwd()             Working directory
 setwd(path)         Change directory
 Sys.time()          Current time
 Sys.getenv(var)     Environment variable
 Sys.sleep(n)        Pause n seconds
 system.time(expr)   Time an expression
+readline(prompt)    Block until stdin line is entered; returns character.
+                    Used for interactive prompts in scripts:
+                      name <- readline("Your name: ")
+                      ans  <- readline("Save as [default.svg]: ")
+                      invisible(readline("Press Enter to continue..."))
 ```
 
 ## Operators (20)

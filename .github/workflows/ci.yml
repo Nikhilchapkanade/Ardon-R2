@@ -32,17 +32,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS temporarily removed from the CI matrix during launch:
-        #  - macos-latest (Apple Silicon, aarch64): Cranelift 0.105.4 does
-        #    not implement PLT on aarch64, so JITModule::new() panics.
-        #  - macos-13 (Intel, x86_64): GitHub is deprecating macos-13;
-        #    runner-allocation queues are presently 30+ min and stuck.
-        # macOS support is documented in docs/KNOWN_LIMITATIONS.md and
-        # will be reinstated once either (a) GitHub macos-13 capacity
-        # recovers, or (b) we gate the JIT entry points so the
-        # interpreter cleanly handles aarch64-apple-darwin without
-        # touching Cranelift's PLT path.
-        os: [ ubuntu-latest, windows-latest ]
+        # macOS Apple Silicon (aarch64) is fully tested. The JIT entry
+        # point is gated by `cfg!(target_arch = "x86_64")` so the engine
+        # falls back to the interpreter on aarch64 instead of touching
+        # Cranelift's PLT path (which panics on non-x86_64). Statistical
+        # outputs are bit-identical across architectures; only the JIT
+        # speed-up is absent on Apple Silicon. Lifting that gate is a
+        # v0.2.0 task that involves upgrading Cranelift to a version
+        # with aarch64 PLT support.
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 

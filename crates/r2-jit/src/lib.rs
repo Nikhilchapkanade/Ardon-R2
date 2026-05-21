@@ -1393,7 +1393,23 @@ fn scalar_f64_of(v: &r2_types::RVal) -> Option<f64> {
     }
 }
 
+/// Compile-time constant: is the Cranelift JIT functional on this target?
+///
+/// `cranelift-jit` 0.105 only implements PLT relocation on `x86_64`. On
+/// aarch64 (Apple Silicon, ARM Linux, etc.) `JITModule::new()` panics
+/// when it encounters any function that needs a PLT entry. We gate the
+/// public entry point on this constant so the engine cleanly falls back
+/// to the interpreter on unsupported targets, without ever touching
+/// Cranelift's PLT path. Lifting this gate is a v0.2.0 task that
+/// involves upgrading Cranelift to a version with aarch64 PLT support.
+pub const JIT_SUPPORTED: bool = cfg!(target_arch = "x86_64");
+
 pub fn try_compile_closure(cl: &r2_types::Closure) -> Option<std::sync::Arc<dyn r2_types::JitHandle>> {
+    // Phase R.M — gate the JIT on supported architectures. On aarch64 the
+    // engine falls back to the interpreter; statistical outputs are
+    // bit-identical, only wall-clock performance differs.
+    if !JIT_SUPPORTED { return None; }
+
     // Filter out anything we definitely can't handle.
     // Phase C.5 admits 3-param closures for the ternary vector-map path.
     if cl.params.len() > 3 { return None; }
@@ -1850,7 +1866,12 @@ fn cmp_to_f64(bcx: &mut FunctionBuilder, l: Value, r: Value, cc: FloatCC) -> Val
 
 // ── Tests ────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+// JIT tests directly exercise `JITModule::new()` and the lowering paths,
+// which panic on aarch64 due to the Cranelift PLT limitation documented
+// at the top of this file. Gate the test module to x86_64 so CI on
+// aarch64 hosts (macos-latest, ARM Linux runners) is clean. Tests still
+// run on Linux x86_64, Windows x86_64, and macOS Intel.
+#[cfg(all(test, target_arch = "x86_64"))]
 mod tests {
     use super::*;
     use r2_ir::{lower_function, lower_program};
