@@ -6,6 +6,36 @@ use, why it falls short of a "production" implementation, and what would
 need to change to close the gap. The goal is to never let users be
 silently misled by a function that looks correct but isn't.
 
+## Platform support
+
+### Apple Silicon (aarch64-apple-darwin) — JIT disabled
+
+**Status:** Ardon-R2 builds and runs on Apple Silicon (M1/M2/M3), but the
+Cranelift JIT path is currently not functional on aarch64-apple-darwin.
+The interpreter, kernel layer, columnar storage, and all statistical
+functions work correctly. JIT-accelerated workloads (closure compilation,
+fused map-reduce) fall back to interpreted execution and run slower than
+on x86_64 platforms.
+
+**Why:** Cranelift 0.105.4 (the JIT backend Ardon-R2 uses) implements the
+Procedure Linkage Table only for x86_64. On aarch64, `JITModule::new()`
+panics during PLT construction. This is an upstream limitation, not a
+defect in Ardon-R2.
+
+**Workaround for Apple Silicon users today:** Use Rosetta 2 to run the
+x86_64 binary, or build with the `aarch64-apple-darwin` target and accept
+the interpreter-only performance. All statistical outputs are bit-identical
+to the JIT path; only wall-clock performance differs.
+
+**Path to closure:** Either upgrade Cranelift to a version with aarch64
+PLT support (when one lands), or gate the JIT entry points in `r2-jit`
+to return `None` on unsupported targets so the engine cleanly falls back
+to the interpreter without panicking. Tracked for v0.1.2.
+
+CI currently tests `ubuntu-latest`, `windows-latest`, and `macos-13`
+(Intel). Apple Silicon will be added to the matrix once the JIT panic
+is resolved.
+
 ## Linear algebra (`r2-linalg`, `r2-base::linalg_ops`)
 
 ### `svd(M)` — full thin SVD now shipped ✅ (Tier 1)

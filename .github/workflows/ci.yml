@@ -32,7 +32,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        # macos-13 is the last Intel x86_64 macOS runner GitHub provides.
+        # macos-latest is Apple Silicon (aarch64), and Cranelift JIT
+        # (cranelift-jit 0.105.4) does not yet support PLT on aarch64,
+        # so JIT tests panic at JITModule::new(). Tracked in the
+        # KNOWN_LIMITATIONS doc; Apple Silicon support lands once we
+        # either upgrade Cranelift to a version with aarch64 PLT, or
+        # gate the JIT entry points to gracefully fall back to the
+        # interpreter on unsupported targets.
+        os: [ ubuntu-latest, windows-latest, macos-13 ]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
