@@ -5,14 +5,17 @@ rustflags = ["-C", "link-args=/STACK:67108864"]
 [target.i686-pc-windows-msvc]
 rustflags = ["-C", "link-args=/STACK:67108864"]
 
-# macOS Intel and Apple Silicon: 64MB stack via the macOS linker.
-# Default macOS main-thread stack is 8MB which is usually fine, but the
-# JIT's recursive IR lowering can spike past it on deep expressions.
-[target.x86_64-apple-darwin]
-rustflags = ["-C", "link-args=-Wl,-stack_size,0x4000000"]
-
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "link-args=-Wl,-stack_size,0x4000000"]
+# macOS Intel and Apple Silicon: NO link-time stack-size flag.
+#
+# macOS's `ld` accepts `-stack_size` only when linking a main executable,
+# not when building intermediate `.dylib` libraries or proc-macro crates.
+# Setting the flag globally via `rustflags` therefore breaks the build of
+# every dependency that compiles to a dylib (thiserror-impl, serde, etc.).
+#
+# The default macOS main-thread stack of 8 MB is sufficient for typical
+# Ardon-R2 workloads. If deep IR recursion ever spikes past it, the
+# correct fix is to spawn worker threads with `std::thread::Builder::
+# stack_size(64 << 20)` rather than relying on the link-time flag.
 
 # Linux x86_64 and ARM64: the linker takes a different flag, and the
 # default user-stack soft limit (typically 8MB) is set by the kernel
