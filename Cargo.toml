@@ -1,5 +1,4 @@
 [workspace]
-license = "AGPL-3.0"
 resolver = "2"
 members = [
     "crates/r2-types",

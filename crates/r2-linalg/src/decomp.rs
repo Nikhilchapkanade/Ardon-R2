@@ -53,13 +53,13 @@ pub fn dgetrf(n: usize, a: &mut [f64]) -> Result<Vec<usize>, LinalgError> {
         let trail_start = k + kb;
         if trail_start < n {
             let trail_m = n - trail_start;
-            let trail_n = n - trail_start;
+            let _trail_n = n - trail_start;
             for j in trail_start..n {
                 for kk in k..(k + kb) {
                     let u_kj = a[j * n + kk]; // U[kk, j]
                     if u_kj != 0.0 {
                         // 4-way unrolled for SIMD
-                        let main = trail_start + ((trail_m) / 4) * 4;
+                        let _main = trail_start + ((trail_m) / 4) * 4;
                         let mut i = trail_start;
                         while i + 3 < n {
                             a[j * n + i]     -= a[kk * n + i]     * u_kj;
@@ -131,7 +131,7 @@ pub fn dpotrf(n: usize, a: &mut [f64]) -> Result<(), LinalgError> {
             for col in trail..n {
                 for row in col..n {
                     let mut dot = 0.0;
-                    let main = j + ((jb) / 4) * 4;
+                    let _main = j + ((jb) / 4) * 4;
                     let mut k = j;
                     while k + 3 < j + jb {
                         dot += a[k * n + row] * a[k * n + col]
@@ -853,8 +853,14 @@ pub fn dsyev_full(n: usize, a: &[f64]) -> Result<(Vec<f64>, Vec<f64>), LinalgErr
     // Stage 2 — Implicit symmetric QR with Wilkinson shift on (d, e),
     // accumulating Givens rotations into Q.
     let max_sweeps = 30 * n;
-    let mut start = 0usize;
     let mut end = n - 1;
+    // `start` is unconditionally reassigned inside the deflation loop
+    // before it is first read; the initial value is a placeholder for
+    // definite-assignment. The lint correctly notes the placeholder
+    // assignment is never read — we keep it for clarity rather than
+    // restructuring the loop to declare-then-assign on first iteration.
+    #[allow(unused_assignments)]
+    let mut start = end;
     let mut sweeps = 0usize;
 
     while end > 0 {

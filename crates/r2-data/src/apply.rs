@@ -18,7 +18,6 @@
 //!   §4.7 Backwards-compatible — engine adapters delegate
 //!   §4.9 Parallelism via `r2_kernel::par_for`, not `par_iter`
 
-use r2_kernel::par_for;
 use r2_oracle::Op;
 use r2_types::*;
 use std::collections::HashMap;

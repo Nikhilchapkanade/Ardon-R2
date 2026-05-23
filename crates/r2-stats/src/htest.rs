@@ -28,7 +28,7 @@
 //! **fisher.test status (v0.1.0):** exact hypergeometric (via `lchoose`
 //! / `hypergeom_pmf`) replacing the earlier χ² approximation.
 
-use crate::dist::{phi, qnorm_approx, erf};
+use crate::dist::{phi, qnorm_approx};
 use r2_types::{Attrs, ErrKind, EvalArg, R2Err, RVal, TypeInstance};
 use std::collections::HashMap;
 use std::sync::Arc;

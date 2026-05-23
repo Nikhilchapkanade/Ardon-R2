@@ -49,6 +49,25 @@ out_*.png
 out_*.csv
 *.r2s
 
+# Plot SVGs produced by r2-graphics builtins. These end up in the user's
+# working directory (usually the repo root when running samples) and must
+# never enter the source tree. The four bare names are the auto-save
+# filenames each plot type writes to; the rest are the demo's save targets.
+/plot.svg
+/hist.svg
+/boxplot.svg
+/barplot.svg
+/demo-overlays.svg
+/iris-overview.svg
+/iris-overview-final.svg
+/iris-tall.svg
+/wrap-demo.svg
+/plot-restored.svg
+
+# r2-graphics crate also accumulates test artifacts under its own dir
+# (from legacy tests that wrote SVG into the crate root). Block them.
+crates/r2-graphics/*.svg
+
 # ─── Private design and roadmap documents (kept locally) ────────────
 
 docs/rustR2_ai_library.md

@@ -26,7 +26,7 @@
 //!   - Pattern match lowering
 //!   - Type definitions / methods
 
-use r2_types::infer::{IrType, TypeCtx, infer_expr};
+use r2_types::infer::{IrType, TypeCtx};
 use r2_types::*;
 use std::collections::HashMap;
 use std::sync::Arc;

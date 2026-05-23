@@ -2,6 +2,8 @@ use r2_parser::Parser;
 use r2_engine::Engine;
 use r2_types::Expr;
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 fn main() {
     // Stack size set to 64MB via .cargo/config.toml linker flags
@@ -43,11 +45,23 @@ fn run_script(path: &str) -> i32 {
 }
 
 fn repl_main() {
+    // Phase R.M.2 — install Ctrl+C handler. SIGINT sets the engine's
+    // global interrupt flag; the eval loop polls it at every Expr and
+    // raises ErrKind::Interrupt, which we catch below and treat as a
+    // "return to prompt" event instead of letting it kill the process.
+    // The handler is idempotent — set_handler errors only if a handler
+    // is already installed, which we silently ignore for safety.
+    let _ = ctrlc::set_handler(|| {
+        r2_types::request_interrupt();
+        // Print on a new line so the next prompt is clean.
+        eprintln!();
+    });
+
     println!("\nArdon-R2 — Statistical Computing, Reimagined");
     println!("Version 0.1.1 (2026) | Inspired by R. Built on Rust.");
     println!("Created by Devendra Tandale | An AI-Assisted Project");
     println!("Assignment: both <- and = work. Mode: strict.");
-    println!("Type q() to quit. Arrow keys for history.\n");
+    println!("Type q() to quit. Esc (or Ctrl+C) aborts running evaluation. Arrow keys for history.\n");
 
     let mut engine = Engine::new();
     let mut history: Vec<String> = Vec::new();
@@ -91,16 +105,35 @@ fn repl_main() {
         match Parser::parse(&buffer) {
             Ok(stmts) => {
                 continuation = false;
+                // Clear any stale interrupt flag set while the user was at
+                // the idle prompt (Esc/Ctrl+C at the prompt should not
+                // interrupt the very next command).
+                r2_types::clear_interrupt();
                 for stmt in &stmts {
-                    // Catch any panic to prevent REPL crash
+                    // Phase R.M.2 — start the Esc-polling thread for the
+                    // duration of this single statement's evaluation.
+                    // Stopped after the eval call completes regardless of
+                    // success or interrupt.
+                    let poller = EscPoller::start();
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         engine.eval(stmt)
                     }));
+                    poller.stop();
                     match result {
                         Ok(Ok(val)) => {
                             if !is_silent(stmt) && !matches!(&val, r2_types::RVal::Null) {
                                 println!("{}", val);
                             }
+                        }
+                        // Phase R.M.2 — Ctrl+C caught here: print a brief
+                        // notice, clear the global flag, break out of the
+                        // current statement batch and loop back to the prompt.
+                        // The engine state is left intact (variables defined
+                        // before the interrupt are still bound).
+                        Ok(Err(e)) if e.kind == r2_types::ErrKind::Interrupt => {
+                            eprintln!("interrupted — returning to prompt");
+                            r2_types::clear_interrupt();
+                            break;
                         }
                         Ok(Err(e)) => eprintln!("{}", e),
                         Err(_) => eprintln!("Error: internal error (please report this bug)"),
@@ -244,10 +277,82 @@ fn read_line_with_history(prompt: &str, history: &[String]) -> Option<String> {
 }
 
 #[cfg(windows)]
-extern "C" { fn _getch() -> i32; }
+extern "C" {
+    fn _getch() -> i32;
+    fn _kbhit() -> i32;
+}
 
 #[cfg(windows)]
 fn win_getch() -> i32 { unsafe { _getch() } }
+
+#[cfg(windows)]
+fn win_kbhit() -> bool { unsafe { _kbhit() != 0 } }
+
+#[cfg(not(windows))]
+fn win_kbhit() -> bool {
+    // Unix: rely on Ctrl+C only. A proper poll-for-Esc on Unix needs
+    // termios raw mode toggling, which interferes with the line editor
+    // above. Acceptable: r/rust + r/rstats users on Linux/Mac are
+    // comfortable with Ctrl+C, and ctrlc::set_handler covers them.
+    false
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase R.M.2 — Esc-as-interrupt polling thread.
+//
+// Spawned just before each user-driven evaluation, joined after. Polls
+// the keyboard non-blocking every 50 ms; if it sees byte 27 (Esc),
+// it sets the engine's global INTERRUPT flag, which the eval loop
+// observes at the next Expr boundary and unwinds with ErrKind::Interrupt.
+//
+// The polling thread shuts itself down when the `active` flag flips to
+// false (signaled by the REPL after eval completes). On Windows, _kbhit
+// + _getch are non-blocking and OS-level; on Unix we currently fall back
+// to Ctrl+C only (see comment above on termios).
+// ─────────────────────────────────────────────────────────────────────
+
+struct EscPoller {
+    active: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl EscPoller {
+    fn start() -> Self {
+        let active = Arc::new(AtomicBool::new(true));
+        let active_clone = active.clone();
+        let handle = std::thread::Builder::new()
+            .name("r2-esc-poll".into())
+            .spawn(move || {
+                while active_clone.load(Ordering::Relaxed) {
+                    if win_kbhit() {
+                        #[cfg(windows)]
+                        {
+                            let ch = win_getch();
+                            if ch == 27 {
+                                // Escape pressed — raise interrupt and exit.
+                                r2_types::request_interrupt();
+                                break;
+                            }
+                            // Other keystrokes during eval are discarded
+                            // (acceptable tradeoff: typing-ahead during a
+                            // long compute is rare; Ctrl+C remains as
+                            // signal-level fallback).
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            })
+            .ok();
+        EscPoller { active, handle }
+    }
+
+    fn stop(mut self) {
+        self.active.store(false, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
 
 #[cfg(windows)]
 fn redraw_line(prompt: &str, line: &str, cursor: usize) {

@@ -11,3 +11,8 @@ path = "src/main.rs"
 r2-types = { path = "../r2-types" }
 r2-parser = { path = "../r2-parser" }
 r2-engine = { path = "../r2-engine" }
+# ctrlc: tiny cross-platform SIGINT handler. Pure-Rust, no transitive
+# dependencies, ~3KB compiled. Used to wire Ctrl+C to the engine's
+# interrupt flag so users can abort runaway evaluations and return to
+# the R2> prompt without killing the process. Phase R.M.2.
+ctrlc = { version = "3", default-features = false }

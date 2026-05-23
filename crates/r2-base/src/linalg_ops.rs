@@ -17,8 +17,8 @@
 //!     refuse the temptation. Full U/Vᵀ is on the roadmap (tridiag+QR
 //!     replacement of Jacobi, see KNOWN_LIMITATIONS).
 
-use r2_linalg::{dgesvd, dgesvd_full, dsyev, dsyev_full};
-use r2_types::{fmt_num, Attrs, ErrKind, EvalArg, Matrix, R2Err, RVal, Tensor};
+use r2_linalg::{dgesvd_full, dsyev_full};
+use r2_types::{Attrs, ErrKind, EvalArg, Matrix, R2Err, RVal, Tensor};
 use std::collections::HashMap;
 use std::sync::Arc;
 

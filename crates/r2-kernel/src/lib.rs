@@ -213,6 +213,22 @@ pub enum MapOp {
     Log2,
     Log10,
     Neg,
+    // Phase R.M.1 — trig and transcendental ops. NA-aware, IEEE-754 NaN
+    // propagation through every operation. Match CRAN R 4.5 behavior:
+    // sin/cos/tan accept radians, asin/acos return NaN outside [-1,1].
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Sinh,
+    Cosh,
+    Tanh,
+    Sign,
+    Trunc,
+    Expm1,
+    Log1p,
 }
 
 pub trait MapBackend: Send + Sync {
@@ -229,6 +245,19 @@ fn apply_op(op: MapOp, v: f64) -> f64 {
         MapOp::Log2  => v.log2(),
         MapOp::Log10 => v.log10(),
         MapOp::Neg   => -v,
+        MapOp::Sin   => v.sin(),
+        MapOp::Cos   => v.cos(),
+        MapOp::Tan   => v.tan(),
+        MapOp::Asin  => v.asin(),
+        MapOp::Acos  => v.acos(),
+        MapOp::Atan  => v.atan(),
+        MapOp::Sinh  => v.sinh(),
+        MapOp::Cosh  => v.cosh(),
+        MapOp::Tanh  => v.tanh(),
+        MapOp::Sign  => if v > 0.0 { 1.0 } else if v < 0.0 { -1.0 } else if v == 0.0 { 0.0 } else { f64::NAN },
+        MapOp::Trunc => v.trunc(),
+        MapOp::Expm1 => v.exp_m1(),
+        MapOp::Log1p => v.ln_1p(),
     }
 }
 

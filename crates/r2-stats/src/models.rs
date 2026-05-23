@@ -14,7 +14,7 @@
 
 use crate::{fmt_pval, phi, signif_stars};
 use r2_types::{
-    fmt_num, Attrs, ErrKind, EvalArg, Matrix, R2Err, RVal, Real, TypeInstance,
+    fmt_num, Attrs, ErrKind, EvalArg, Matrix, R2Err, RVal, TypeInstance,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
