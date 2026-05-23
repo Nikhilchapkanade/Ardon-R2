@@ -1,7 +1,7 @@
 use r2_parser::Parser;
 use r2_engine::Engine;
 use r2_types::Expr;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -61,7 +61,7 @@ fn repl_main() {
     println!("Version 0.1.1 (2026) | Inspired by R. Built on Rust.");
     println!("Created by Devendra Tandale | An AI-Assisted Project");
     println!("Assignment: both <- and = work. Mode: strict.");
-    println!("Type q() to quit. Esc (or Ctrl+C) aborts running evaluation. Arrow keys for history.\n");
+    println!("Type q() to quit.\n");
 
     let mut engine = Engine::new();
     let mut history: Vec<String> = Vec::new();
@@ -77,8 +77,67 @@ fn repl_main() {
 
         let trimmed = line.trim();
         if !continuation && (trimmed == "q()" || trimmed == "quit()") {
-            println!("Goodbye.");
-            break;
+            // Phase R.M.3 — R-style workspace save prompt.
+            // y → save all globals to session.r2s, then exit.
+            // n → exit without saving (default if user just hits Enter).
+            // c → cancel quit, return to prompt with state intact.
+            print!("Save workspace image? [y/n/c]: ");
+            io::stdout().flush().ok();
+            let mut answer = String::new();
+            io::stdin().lock().read_line(&mut answer).ok();
+            let a = answer.trim().to_lowercase();
+            match a.as_str() {
+                "y" | "yes" => {
+                    // Second prompt: let the user pick a filename, or
+                    // accept the R-style default by hitting Enter.
+                    print!("Filename [session.r2s]: ");
+                    io::stdout().flush().ok();
+                    let mut name = String::new();
+                    io::stdin().lock().read_line(&mut name).ok();
+                    let filename = {
+                        let t = name.trim();
+                        if t.is_empty() { "session.r2s".to_string() } else { t.to_string() }
+                    };
+
+                    // Reuse the existing save() builtin via a synthetic
+                    // parse → eval call. One serialization code path
+                    // covers explicit save("path") and the q() prompt.
+                    let saved = match Parser::parse(&format!("save(\"{}\")", filename.replace('\\', "\\\\").replace('"', "\\\""))) {
+                        Ok(stmts) => {
+                            let mut ok = true;
+                            for s in &stmts {
+                                if let Err(e) = engine.eval(s) {
+                                    eprintln!("Save failed: {}", e);
+                                    ok = false;
+                                }
+                            }
+                            ok
+                        }
+                        Err(_) => { eprintln!("Save failed: internal parser error"); false }
+                    };
+
+                    if saved {
+                        // Print the absolute path so the user knows where
+                        // their workspace went — equivalent to R's printout.
+                        let abs = std::fs::canonicalize(&filename)
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|_| filename.clone());
+                        println!("Workspace saved to: {}", abs);
+                    }
+                    println!("Goodbye.");
+                    break;
+                }
+                "c" | "cancel" => {
+                    println!("(quit cancelled — back to prompt)");
+                    buffer.clear();
+                    continue;
+                }
+                _ => {
+                    // "n", "no", empty, or anything else → exit without saving.
+                    println!("Goodbye.");
+                    break;
+                }
+            }
         }
 
         // R-style help: ?topic or ??topic → help("topic")
