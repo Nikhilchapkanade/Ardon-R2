@@ -169,6 +169,23 @@ pub fn current_has_plot() -> bool {
 /// SVG body is cleared. When in the middle of a panel cycle, the previous
 /// panels' content is preserved and the new plot is placed in the next slot.
 pub fn begin_plot() -> (f64, f64, f64, f64) {
+    // Phase R.G.4 — auto-launch the live browser plot viewer on first
+    // plot of the session. Without this, users see SVG/PNG files written
+    // to disk but no graphical window — confusing if they expected
+    // RStudio/Rgui behavior. The browser stays open across the session
+    // and live-refreshes after every plot.
+    //
+    // Opt-out: set R2_NO_AUTOVIEW=1 in the environment.
+    static AUTOVIEW_LAUNCHED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if AUTOVIEW_LAUNCHED.get().is_none() && std::env::var("R2_NO_AUTOVIEW").is_err() {
+        let _ = AUTOVIEW_LAUNCHED.set(());
+        if let Some(port) = crate::server::ensure_started() {
+            println!("Plot viewer opened in browser: http://127.0.0.1:{}/", port);
+            println!("  (set R2_NO_AUTOVIEW=1 to disable, or close the tab any time.)");
+            crate::server::open_browser(port);
+        }
+    }
+
     DEVICE.with(|d| {
         let mut dev = d.borrow_mut();
         let multipanel = dev.params.mfrow.is_some() || dev.params.mfcol.is_some();

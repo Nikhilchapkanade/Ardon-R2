@@ -239,18 +239,36 @@ fn repl_main() {
 
 // Locate a writable default working directory for the interactive REPL.
 // Returns None if no candidate exists.
+//
+// Critical Windows nuance: when OneDrive is configured to back up the
+// Documents library, Windows Explorer's "Documents" shortcut points at
+// `%USERPROFILE%\OneDrive\Documents\`, NOT at `%USERPROFILE%\Documents\`.
+// Both folders physically exist as separate trees. If we save plots to
+// the literal `%USERPROFILE%\Documents\`, the user clicks "Documents"
+// in Explorer, doesn't find their plot, and reasonably thinks R2 is
+// broken. So we prefer the OneDrive path when it exists.
 fn pick_user_home() -> Option<std::path::PathBuf> {
-    // 1. Explicit user override.
+    // 1. Explicit user override always wins.
     if let Ok(custom) = std::env::var("R2_HOME") {
         let p = std::path::PathBuf::from(custom);
         if p.is_dir() { return Some(p); }
     }
-    // 2. Windows: %USERPROFILE%\Documents.
+    // 2. OneDrive-redirected Documents — what Explorer shows.
+    //    OneDrive sets %OneDrive% when its client is running; we also
+    //    look at the canonical %USERPROFILE%\OneDrive\Documents path
+    //    in case the env var isn't propagated.
+    if let Ok(od) = std::env::var("OneDrive") {
+        let p = std::path::PathBuf::from(&od).join("Documents");
+        if p.is_dir() { return Some(p); }
+    }
     if let Ok(user) = std::env::var("USERPROFILE") {
+        let od = std::path::PathBuf::from(&user).join("OneDrive").join("Documents");
+        if od.is_dir() { return Some(od); }
+        // 3. Plain Windows Documents.
         let docs = std::path::PathBuf::from(user).join("Documents");
         if docs.is_dir() { return Some(docs); }
     }
-    // 3. Unix: $HOME (optionally $HOME/Documents if it exists).
+    // 4. Unix: $HOME/Documents if it exists, else $HOME.
     if let Ok(home) = std::env::var("HOME") {
         let docs = std::path::PathBuf::from(&home).join("Documents");
         if docs.is_dir() { return Some(docs); }
