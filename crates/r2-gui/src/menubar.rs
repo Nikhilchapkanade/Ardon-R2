@@ -1,6 +1,4 @@
-//! Menu bar — File / Edit / Plot / Packages / Settings / Help.
-//!
-//! Mirrors RGui's layout where it makes sense; trimmed for R2.
+//! Menu bar — File / Edit / Run / Plot / Packages / Settings / Help.
 
 use eframe::egui;
 use crate::app::R2App;
@@ -9,26 +7,27 @@ pub fn draw_menubar(ui: &mut egui::Ui, app: &mut R2App) {
     egui::menu::bar(ui, |ui| {
         // ── File ─────────────────────────────────────────────────────
         ui.menu_button("File", |ui| {
-            if ui.button("New script…").clicked() {
-                app.console.push_output("(New script: not yet wired — open a .r2 file via File ▸ Open script for now.)\n");
-                ui.close_menu();
-            }
-            if ui.button("Open script…").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("R2 scripts", &["r2", "R", "r"])
-                    .add_filter("All files", &["*"])
-                    .pick_file()
-                {
-                    match std::fs::read_to_string(&path) {
-                        Ok(src) => app.run_source(&src),
-                        Err(e)  => app.console.push_error(&format!("could not read {}: {}", path.display(), e)),
-                    }
+            if ui.button("New script").clicked() {
+                if app.editor.dirty {
+                    app.console.push_output("(Editor has unsaved changes — Save first or use File ▸ Open to discard.)");
+                } else {
+                    app.editor.text = String::from("# New R2 script\n\n");
+                    app.editor.path = None;
+                    app.editor.dirty = false;
                 }
                 ui.close_menu();
             }
+            if ui.button("Open script…    Ctrl+O").clicked() {
+                app.open_script_dialog();
+                ui.close_menu();
+            }
             ui.separator();
-            if ui.button("Save console transcript…").clicked() {
-                app.console.push_output("(Save transcript: planned for v0.2.1.)\n");
+            if ui.button("Save           Ctrl+S").clicked() {
+                app.save_current_script(false);
+                ui.close_menu();
+            }
+            if ui.button("Save as…   Ctrl+Shift+S").clicked() {
+                app.save_current_script(true);
                 ui.close_menu();
             }
             ui.separator();
@@ -39,16 +38,45 @@ pub fn draw_menubar(ui: &mut egui::Ui, app: &mut R2App) {
 
         // ── Edit ─────────────────────────────────────────────────────
         ui.menu_button("Edit", |ui| {
-            // egui handles Ctrl+C / Ctrl+V / Ctrl+X natively when a
-            // TextEdit has focus. These menu items are mostly for
-            // discoverability.
             ui.label(egui::RichText::new("Ctrl+C  Copy").weak());
             ui.label(egui::RichText::new("Ctrl+V  Paste").weak());
             ui.label(egui::RichText::new("Ctrl+X  Cut").weak());
             ui.label(egui::RichText::new("Ctrl+A  Select All").weak());
+            ui.label(egui::RichText::new("Ctrl+Z  Undo").weak());
+            ui.label(egui::RichText::new("Ctrl+Y  Redo").weak());
             ui.separator();
             if ui.button("Clear console").clicked() {
                 app.console.clear();
+                ui.close_menu();
+            }
+        });
+
+        // ── Run ─────────────────────────────────────────────────────
+        ui.menu_button("Run", |ui| {
+            if ui.button("Run current line  Ctrl+Enter").clicked() {
+                // Trigger via a synthetic call.
+                let line = last_non_comment_line(&app.editor.text);
+                if !line.is_empty() {
+                    app.run_source(&line);
+                }
+                ui.close_menu();
+            }
+            if ui.button("Run whole script  F5").clicked() {
+                let src = app.editor.text.clone();
+                app.run_source(&src);
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("Source open file…").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("R2 scripts", &["r2", "R", "r"])
+                    .pick_file()
+                {
+                    match std::fs::read_to_string(&path) {
+                        Ok(src) => app.run_source(&src),
+                        Err(e)  => app.console.push_error(&format!("could not read {}: {}", path.display(), e)),
+                    }
+                }
                 ui.close_menu();
             }
         });
@@ -92,13 +120,13 @@ pub fn draw_menubar(ui: &mut egui::Ui, app: &mut R2App) {
             if ui.button("Install from local directory…").clicked() {
                 if let Some(path) = rfd::FileDialog::new().pick_folder() {
                     let p = path.to_string_lossy().replace('\\', "/");
-                    app.run_source(&format!(
-                        "install.packages(basename(\"{0}\"), path = \"{0}\")", p));
+                    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                    app.run_source(&format!("install.packages(\"{}\", path = \"{}\")", name, p));
                 }
                 ui.close_menu();
             }
             ui.separator();
-            ui.label(egui::RichText::new("From GitHub:").weak());
+            ui.label(egui::RichText::new("From GitHub example:").weak());
             ui.label(egui::RichText::new("install.packages(\"r2.survival\",").weak());
             ui.label(egui::RichText::new("  path=\"devendratandle/Ardon-R2-libraries\",").weak());
             ui.label(egui::RichText::new("  subdir=\"r2pkg-survival\")").weak());
@@ -115,7 +143,7 @@ pub fn draw_menubar(ui: &mut egui::Ui, app: &mut R2App) {
                     let _ = std::env::set_current_dir(&path);
                     app.settings.working_directory = Some(path.to_string_lossy().to_string());
                     app.settings.save();
-                    app.console.push_output(&format!("Working directory now: {}\n", path.display()));
+                    app.console.push_output(&format!("Working directory now: {}", path.display()));
                 }
                 ui.close_menu();
             }
@@ -142,6 +170,16 @@ pub fn draw_menubar(ui: &mut egui::Ui, app: &mut R2App) {
             }
         });
     });
+}
+
+fn last_non_comment_line(text: &str) -> String {
+    for line in text.lines().rev() {
+        let t = line.trim();
+        if !t.is_empty() && !t.starts_with('#') {
+            return line.to_string();
+        }
+    }
+    String::new()
 }
 
 fn open_url(url: &str) -> std::io::Result<()> {

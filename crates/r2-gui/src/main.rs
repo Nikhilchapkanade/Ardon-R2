@@ -25,6 +25,7 @@
 
 mod app;
 mod console;
+mod editor;
 mod menubar;
 mod plotpane;
 mod settings;
