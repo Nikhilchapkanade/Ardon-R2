@@ -1,0 +1,28 @@
+[package]
+name = "r2-gui"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "R2Gui"
+path = "src/main.rs"
+
+[dependencies]
+r2-types    = { path = "../r2-types" }
+r2-parser   = { path = "../r2-parser" }
+r2-engine   = { path = "../r2-engine" }
+r2-graphics = { path = "../r2-graphics" }
+
+# egui + eframe: pure-Rust immediate-mode GUI. ~5–8 MB added to the
+# release binary, no system GUI deps (no GTK/Qt/win32 SDK required).
+# Cross-platform: works on Windows, macOS, Linux identically.
+eframe = { version = "0.27", default-features = false, features = ["default_fonts", "wgpu"] }
+egui   = "0.27"
+image  = { version = "0.25", default-features = false, features = ["png"] }
+
+# For reading SVG plots produced by the engine and rasterizing for
+# display in the plot window. Already used elsewhere; deduped by Cargo.
+resvg     = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
+tiny-skia = "0.11"
+usvg      = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
+rfd       = "0.14"
