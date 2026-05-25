@@ -19,4 +19,5 @@ r2-data = { path = "../r2-data" }
 r2-graphics = { path = "../r2-graphics" }
 r2-strings = { path = "../r2-strings" }
 r2-io = { path = "../r2-io" }
+r2-pkg = { path = "../r2-pkg" }
 rayon = "1.10"

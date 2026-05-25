@@ -6,6 +6,175 @@ use, why it falls short of a "production" implementation, and what would
 need to change to close the gap. The goal is to never let users be
 silently misled by a function that looks correct but isn't.
 
+## Architecture — addon packages and the ecosystem path
+
+### No addon packages yet — everything statically linked
+
+Ardon-R2 currently ships as one monolithic binary (~6.6 MB). Every
+function — math, stats, ML, plotting, JIT, kernels — lives in the
+single `r2` executable. Users cannot write or install separate
+packages the way R users can `install.packages("survival")`.
+
+**Consequence**: only built-in functions are available. Niche
+domain-specific tools (survival analysis, structural equation
+models, ecological diversity indices, single-cell genomics, etc.)
+have no path into a user's workflow except by being merged into the
+main repository.
+
+**Current `r2-pkg` crate**: 15-LoC skeleton. `library()` builtin
+exists as a stub. The registry's `add_layer()` mechanism supports
+adding new function tables at runtime, but no loader is wired up.
+
+**Three-stage path to a real package ecosystem**:
+
+1. **v0.3.0 — Cargo feature flags.** Split optional domains into
+   feature-gated workspace crates (e.g. `--features mixed`,
+   `--features multivariate`, `--features ml`, `--features
+   plotting`, `--features jit`). Slim build ≈ 3 MB, full ≈ 7 MB.
+   ~200 LoC. Lets users opt out of components they don't need;
+   gives contributors a way to add optional crates without
+   bloating the default build. Tracked for v0.3.0.
+
+2. **v0.4.0 — R2-script packages.** Pure R2 source loaded from
+   `.r2pkg` files via `library("name")`. Discovery via a simple
+   manifest (TOML or JSON). Like R's CRAN packages but R2-code-only.
+   ~500 LoC. Lets the community publish packages without touching
+   the main repository. **This is the inflection point where
+   Ardon-R2 stops being a single project and starts being an
+   ecosystem.** Tracked for v0.4.0.
+
+3. **v1.0+ — Dynamic linking (.dll / .so).** Compile Rust addon
+   crates as dylibs, load at runtime with `dlopen` / `LoadLibrary`.
+   Matches R's CRAN model exactly. ~1500 LoC plus security review
+   (signed binaries, sandboxing). Worth doing only once there's
+   real contributor demand. Tracked for v1.0+.
+
+### Functions that should probably be addons, not built-in
+
+When the addon mechanism lands, these likely move out of the core
+to optional crates:
+
+- `hotelling.test`, `manova` — multivariate stats audience (~10–15%
+  of R users). Would live in `r2-multivariate` addon.
+- `lmer` — mixed-models audience (~15–20% of R users). Would live
+  in `r2-mixed` addon.
+- `rpart`, `rf`, `gbm`, `knn`, `naive.bayes` — ML domain. Would
+  live in `r2-ml` addon (already a separate crate; just needs
+  feature gating).
+- `plot`, `hist`, `dev.view`, `par` — graphics domain. Would live
+  in `r2-graphics` addon.
+
+The 80%-used core (`mean`, `sd`, `lm`, `glm`, `t.test`, `summary`,
+`c()`, data frames, formulas, the math/trig builtins) stays in
+the always-on core.
+
+### Engine extension currently requires editing the main file
+
+Adding any new builtin requires touching `crates/r2-engine/src/lib.rs`:
+~3 lines per function (1-line wrapper + register the name in the
+layer's vec). This is fine while the project is small but won't
+scale to a real package ecosystem.
+
+**Mitigation in current code**: math and stats live in their own
+crates (`r2-stats`, `r2-kernel`, etc.) so the engine wrapper is
+genuinely thin (one line that delegates). The engine doesn't
+contain math logic anywhere — it's pure dispatch.
+
+**Path to closure**: the addon mechanism above eliminates this for
+external contributors. For internal core functions, a future
+`#[builtin]` proc-macro could auto-generate wrappers + registration
+from a single attribute. ~200 LoC of macro work. Tracked for v0.4.0.
+
+## Multivariate / repeated-measures statistics
+
+### Wilson-Hilferty p-values at very small df
+
+The F→p conversion in `aov` (including the repeated-measures branch)
+and `hotelling.test` uses the Wilson-Hilferty approximation, not the
+exact F-distribution CDF. This is accurate for moderate sample sizes
+(n ≥ 10) and matches R to ~1e-4 there. At very small df (e.g., n=4
+paired Hotelling with p=2 → df=(2, 2)), the approximation can differ
+from R's exact p-value by a factor of ~2. The T², F-statistic, and
+degrees of freedom remain exact regardless of n.
+
+**Path to closure:** swap the Wilson-Hilferty call for an exact F-CDF
+based on the regularized incomplete beta function. The math is in
+`r2_stats::htest::incomplete_beta`; one swap closes this gap.
+Tracked for v0.2.1.
+
+### `Error(treatment/subject)` collapses to outer stratum
+
+Nested Error syntax `Error(A/B)` is accepted and treated as
+`Error(A)` for the one-way RM-ANOVA case. This is correct for the
+crossed within-subject design but does not yet implement true
+split-plot decomposition (multiple nested random strata, separate
+F-tests per stratum). Tracked for v0.2.1.
+
+### MANOVA — eigenvalues drift ~1–3% from R's LAPACK values
+
+`manova()` ships with all four classical statistics (Pillai's trace,
+Wilks' Lambda, Hotelling-Lawley, Roy's largest root), each with its
+own Rao-style F-approximation, df pair, and p-value. The output also
+prints the eigenvalues of E⁻¹H and an interpretation block telling
+the user which statistic to treat as primary for their design
+(Pillai for robustness, Wilks for ML-classical, HL for power under
+assumptions, Roy when one dimension dominates).
+
+**Where R2 differs from R numerically.** On the canonical iris MANOVA:
+
+| Quantity | R | R2 | drift |
+|---|---|---|---|
+| λ₁ (Roy)            | 32.19  | 31.78  | −1.3% |
+| λ₂                  | 0.286  | 0.277  | −3.1% |
+| Hotelling-Lawley    | 32.48  | 32.06  | −1.3% |
+| Wilks Λ             | 0.0234 | 0.0239 | +2.1% |
+| Pillai V            | 1.192  | 1.187  | −0.4% |
+| Wilks F-approx df₂  | 288    | 286    | off by 2 |
+
+The conclusion (p < 2e-16) is identical at every conventional α level.
+
+**Root cause.** R uses LAPACK's `dgeev` (general non-symmetric
+eigensolver) directly on E⁻¹H. R2 currently uses the Cholesky-
+symmetrized path: factor E = LLᵀ, form B = L⁻¹HL⁻ᵀ, then `dsyev` on
+the symmetric B. Mathematically these give identical eigenvalues;
+numerically the Cholesky path involves ~5× more floating-point
+operations per eigenvalue, and each triangular solve amplifies error
+by the condition number of L. For iris, condition(E) ≈ 100, giving
+the ~1% drift observed.
+
+The F-values differ proportionally because they're computed from
+the (drifted) statistic values — this is NOT a problem with the
+F-distribution PDF / CDF; that path is unchanged. The Wilks df₂
+off-by-2 is a separate small Rao-formula choice that doesn't affect
+the F-value materially.
+
+**Path to closure (v0.2.1).** Add `dgeev` (general non-symmetric
+eigenvalue solver) to `r2-linalg` and call it directly on E⁻¹H.
+~300–400 LoC of unblocked LAPACK-style code; eliminates the drift
+entirely. Also re-derive the Wilks df₂ formula against R's exact
+choice.
+
+### Paired Hotelling T² — R's `Hotelling` package contradicts textbooks
+
+R's `Hotelling::hotelling.test(X, Y, paired=TRUE)` silently ignores
+the `paired` argument and returns the unpaired two-sample T². The
+standard textbook definition (Anderson 1958, Mardia/Kent/Bibby 1979,
+Johnson & Wichern, Manly) is the **one-sample T² on the per-subject
+difference matrix**, which R2 implements correctly. To cross-verify
+R2's paired result in R, use any of:
+
+- `Hotelling::hotelling.test(X - Y)` (one-sample on differences)
+- `ICSNP::HotellingsT2(X, Y, test='f')`
+- `MVTests::OneSampleHT2(X - Y, mu0 = rep(0, p))`
+
+All three give the textbook paired result that R2 produces.
+
+### Mixed models (`lmer`-style random effects) not yet implemented
+
+Full random-intercept / random-slope mixed models with REML or ML
+estimation are R.S.4 work. v0.2.0 ships repeated-measures ANOVA but
+not lme4-equivalent functionality.
+
 ## Platform support
 
 ### Apple Silicon (aarch64-apple-darwin) — JIT falls back to interpreter

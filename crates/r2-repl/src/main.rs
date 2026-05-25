@@ -45,6 +45,26 @@ fn run_script(path: &str) -> i32 {
 }
 
 fn repl_main() {
+    // ── Default working directory ────────────────────────────────────
+    // Following R's convention: launch in the user's Documents folder
+    // (or $HOME on Unix) rather than wherever the .exe lives. Without
+    // this, users who launched via the Start Menu would see `getwd()`
+    // return `C:\Users\…\AppData\Local\Programs\Ardon-R2` — confusing
+    // and not writable on Program Files installs.
+    //
+    // Resolution order:
+    //   1. `R2_HOME` env var (explicit user override).
+    //   2. `%USERPROFILE%\Documents` on Windows.
+    //   3. `$HOME` on Unix.
+    //   4. Fall back to current cwd (no change) if none of the above.
+    //
+    // We only change cwd in *interactive* mode. Scripts run via
+    // `r2 script.r2` keep their invocation cwd so relative paths in
+    // user scripts work as expected.
+    if let Some(home) = pick_user_home() {
+        let _ = std::env::set_current_dir(&home);
+    }
+
     // Phase R.M.2 — install Ctrl+C handler. SIGINT sets the engine's
     // global interrupt flag; the eval loop polls it at every Expr and
     // raises ErrKind::Interrupt, which we catch below and treat as a
@@ -215,6 +235,29 @@ fn repl_main() {
             }
         }
     }
+}
+
+// Locate a writable default working directory for the interactive REPL.
+// Returns None if no candidate exists.
+fn pick_user_home() -> Option<std::path::PathBuf> {
+    // 1. Explicit user override.
+    if let Ok(custom) = std::env::var("R2_HOME") {
+        let p = std::path::PathBuf::from(custom);
+        if p.is_dir() { return Some(p); }
+    }
+    // 2. Windows: %USERPROFILE%\Documents.
+    if let Ok(user) = std::env::var("USERPROFILE") {
+        let docs = std::path::PathBuf::from(user).join("Documents");
+        if docs.is_dir() { return Some(docs); }
+    }
+    // 3. Unix: $HOME (optionally $HOME/Documents if it exists).
+    if let Ok(home) = std::env::var("HOME") {
+        let docs = std::path::PathBuf::from(&home).join("Documents");
+        if docs.is_dir() { return Some(docs); }
+        let h = std::path::PathBuf::from(home);
+        if h.is_dir() { return Some(h); }
+    }
+    None
 }
 
 fn is_silent(e: &Expr) -> bool {

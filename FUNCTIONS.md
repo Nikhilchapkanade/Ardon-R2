@@ -1,4 +1,4 @@
-# Ardon-R2 Function Reference — 197 Built-in Functions
+# Ardon-R2 Function Reference — 216 Built-in Functions
 
 ## Core (25)
 ```
@@ -42,7 +42,7 @@ max(x)      Maximum                 min(x)      Minimum
 sum(x)      Sum of all              sign(x)     Sign (-1,0,1)
 ```
 
-## Statistics (22)
+## Statistics (24)
 ```
 mean(x)         Arithmetic mean
 sd(x)           Standard deviation
@@ -50,10 +50,43 @@ var(x)          Variance
 cor(x,y)        Correlation
 median(x)       Median
 quantile(x,p)   Quantile at probability p
-lm(y~x,data)   Linear regression
+lm(y~x,data)    Linear regression
 glm(y~x,data,family) Generalized linear model
-t.test(x,mu)    T-test
+aov(y~x,data)   One-way analysis of variance
+                Repeated measures (Phase R.S.1):
+                  aov(y ~ x + Error(subject), data=df)
+                  aov(y ~ x + Error(subject/treatment), data=df)
+                Multi-stratum output matching R's summary(aov).
+                Bit-identical to R's output when R uses factor(subject).
+anova(model)    ANOVA table from a fitted model
+t.test(x,mu)    T-test, paired and unpaired forms
+                One-sample:    t.test(x, mu=0)
+                Two-sample:    t.test(x, y)
+                Welch:         t.test(x, y) [default for unpooled]
+                Paired:        t.test(x, y, paired=TRUE)
+                Formula:       t.test(y ~ group, data=df)
+                Paired w/ id:  t.test(y ~ group, id=subj, paired=TRUE)
+                Phase R.S.1 extensions (not supported by R itself):
+                  t.test(y ~ group + Error(subject), paired=TRUE, data=df)
+                  t.test(y ~ Error(subject), paired=TRUE, data=df)
+                    (pairs each subject's 2 obs by row order)
 chisq.test(x)   Chi-squared test
+hotelling.test  Multivariate Hotelling's T² (Phase R.S.2)
+                One-sample:    hotelling.test(X)
+                With null mu:  hotelling.test(X, mu=c(0,0,0))
+                Two-sample:    hotelling.test(X, Y)
+                Paired/RM:     hotelling.test(X, Y, paired=TRUE)
+                X and Y are n×p matrices of multivariate observations.
+                Returns T², F, df, p-value.
+manova(formula,data) Multivariate ANOVA (Phase R.S.2)
+                LHS is a multivariate response (use cbind):
+                  manova(cbind(y1, y2, y3) ~ group, data=df)
+                Reports four classical statistics:
+                  Wilks' Lambda (with Rao F-approximation + p-value)
+                  Pillai's trace
+                  Hotelling-Lawley trace
+                  Roy's largest root
+                Returns TypeInstance with all four + eigenvalues vector.
 confint(model)  Confidence intervals
 rnorm(n)        Random normal
 runif(n)        Random uniform

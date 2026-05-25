@@ -567,9 +567,39 @@ fn solve_wls(x_mat: &Matrix, w: &[f64], z: &[f64], n: usize, p: usize) -> Result
 // aov — one-way analysis of variance
 // ─────────────────────────────────────────────────────────────────────
 
+/// Extract a column from a formula component as a vector of string labels.
+/// Used for grouping factors (treatment, subject, etc.) regardless of
+/// whether the column came in as Character, Factor, or Numeric. Wraps
+/// the common patterns from the formula RHS / Error term unwrapping.
+fn extract_labels(v: &RVal) -> Result<Vec<String>, R2Err> {
+    let col = match v {
+        RVal::List(items) if !items.is_empty() => items[0].1.clone(),
+        other => other.clone(),
+    };
+    Ok(match &col {
+        RVal::Character(v, _) => v.iter().map(|x| x.as_ref().map(|s| s.to_string()).unwrap_or("NA".into())).collect(),
+        RVal::Factor(f) => f.codes.iter()
+            .map(|c| c.and_then(|i| f.levels.get(i as usize)).map(|s| s.to_string()).unwrap_or("NA".into()))
+            .collect(),
+        _ => col.as_reals()?.iter().map(|x| x.map(fmt_num).unwrap_or("NA".into())).collect(),
+    })
+}
+
 pub fn bi_aov(a: &[EvalArg]) -> Result<RVal, R2Err> {
     let first = gv(a, 0);
     let data = gn(a, "data");
+
+    // Phase R.S.1 — repeated-measures branch.
+    // If the formula carries an `~error` stratum (added by the engine's
+    // formula-construction code when it sees Error(subject/treatment)),
+    // dispatch to the rm-aov computation. The classical one-way / between-
+    // subject path below is untouched.
+    if let Some(RVal::DataFrame(_)) = &data {
+        let items: Vec<(Option<Arc<str>>, RVal)> = match &first { RVal::List(v) => v.clone(), _ => vec![] };
+        if items.iter().any(|(n, _)| n.as_ref().map(|s| s.as_ref()) == Some("~error")) {
+            return aov_repeated_measures(&items, a);
+        }
+    }
 
     let (y_vec, group_vec): (Vec<f64>, Vec<String>) = if let Some(RVal::DataFrame(_)) = &data {
         let items: Vec<(Option<Arc<str>>, RVal)> = match &first { RVal::List(v) => v.clone(), _ => vec![] };
@@ -670,6 +700,252 @@ pub fn bi_aov(a: &[EvalArg]) -> Result<RVal, R2Err> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Phase R.S.1 — Repeated-measures ANOVA.
+//
+// Classical one-way within-subject design. Each subject is measured
+// under every treatment level (balanced). Total variance decomposes:
+//
+//   SS_total  = Σ_ij (y_ij - ȳ..)²
+//   SS_subj   = k · Σ_i (ȳ_i. - ȳ..)²        ← Error: subject stratum
+//   SS_treat  = n · Σ_j (ȳ_.j - ȳ..)²        ← within-subject fixed effect
+//   SS_within = SS_total - SS_subj - SS_treat ← residual within-subject
+//
+// where n = number of subjects, k = number of treatment levels.
+//
+// Degrees of freedom:
+//   df_subj   = n - 1
+//   df_treat  = k - 1
+//   df_within = (n - 1)(k - 1)
+//
+// F-statistic for the treatment (within-subject) effect:
+//   F = (SS_treat / df_treat) / (SS_within / df_within)
+//
+// The output table follows R's `summary(aov(y ~ t + Error(subj)))`
+// layout — two strata, "Error: subject" first (just the subject
+// residual line) then "Error: Within" with the treatment row plus the
+// within-subject residuals.
+// ─────────────────────────────────────────────────────────────────────
+
+fn aov_repeated_measures(
+    items: &[(Option<Arc<str>>, RVal)],
+    a: &[EvalArg],
+) -> Result<RVal, R2Err> {
+    // ── 1. Extract y, treatment, and subject vectors ────────────────
+    let lhs = items.iter()
+        .find(|(n, _)| n.as_ref().map(|s| s.as_ref()) == Some("~lhs"))
+        .map(|(_, v)| v.clone())
+        .unwrap_or(RVal::Null);
+    let rhs = items.iter()
+        .find(|(n, _)| n.as_ref().map(|s| s.as_ref()) == Some("~rhs"))
+        .map(|(_, v)| v.clone())
+        .unwrap_or(RVal::Null);
+    let err = items.iter()
+        .find(|(n, _)| n.as_ref().map(|s| s.as_ref()) == Some("~error"))
+        .map(|(_, v)| v.clone())
+        .unwrap_or(RVal::Null);
+
+    let y_col = match &lhs {
+        RVal::List(items) if !items.is_empty() => items[0].1.clone(),
+        other => other.clone(),
+    };
+    let y: Vec<f64> = y_col.as_reals()?.into_iter().filter_map(|x| x).collect();
+
+    let treatment_col = match &rhs {
+        RVal::List(items) => items.iter()
+            .find(|(n, _)| !n.as_ref().map(|s| s.starts_with('~')).unwrap_or(true))
+            .map(|(_, v)| match v {
+                RVal::List(inner) if !inner.is_empty() => inner[0].1.clone(),
+                v => v.clone(),
+            })
+            .unwrap_or(RVal::Null),
+        v => v.clone(),
+    };
+    // Phase R.S.1 — guard against the common confusion of putting the
+    // fixed effect inside Error() and leaving the LHS empty. If the
+    // formula RHS is null (i.e. user wrote `aov(y ~ Error(drug))`
+    // with no fixed effect), there is nothing to test.
+    if matches!(rhs, RVal::Null) || matches!(&treatment_col, RVal::Null) {
+        return Err(R2Err {
+            msg: "aov: no fixed effect on the right-hand side of '~'. \
+                  You wrote 'aov(y ~ Error(X))' — the Error() term is for clustering, \
+                  not the thing you want to test. \
+                  For between-subject one-way ANOVA write 'aov(y ~ X, data=df)' \
+                  (no Error needed). For within-subject (repeated measures) write \
+                  'aov(y ~ treatment + Error(subject), data=df)'.".into(),
+            kind: ErrKind::Runtime,
+        });
+    }
+
+    let treatments = extract_labels(&treatment_col)?;
+    let subjects = extract_labels(&err)?;
+
+    // Phase R.S.1 — guard against the user putting the fixed effect
+    // inside Error() (e.g. `Error(drug)` or `Error(drug/subjects)`).
+    // When the stratum column equals the treatment column, the random
+    // unit and the fixed effect are the same thing — meaningless.
+    if treatments == subjects {
+        return Err(R2Err {
+            msg: "aov: Error(...) stratum is the same as the fixed effect. \
+                  You wrote something like 'aov(y ~ drug + Error(drug))' or \
+                  'aov(y ~ drug + Error(drug/subject))' — the Error term is for \
+                  the random/clustering variable (subjects), NOT the fixed effect \
+                  (the thing whose means you compare). \
+                  For repeated measures write 'aov(y ~ drug + Error(subject), data=df)'.".into(),
+            kind: ErrKind::Runtime,
+        });
+    }
+
+    if y.len() != treatments.len() || y.len() != subjects.len() {
+        return Err(R2Err {
+            msg: format!(
+                "aov(... + Error(...)): y ({}), treatment ({}), and subject ({}) must have equal length",
+                y.len(), treatments.len(), subjects.len()
+            ),
+            kind: ErrKind::Runtime,
+        });
+    }
+    let n_obs = y.len();
+    if n_obs == 0 {
+        return Err(R2Err { msg: "aov: empty data".into(), kind: ErrKind::Runtime });
+    }
+
+    // ── 2. Identify unique subjects and treatments ─────────────────
+    let mut unique_subjects: Vec<String> = Vec::new();
+    for s in &subjects { if !unique_subjects.contains(s) { unique_subjects.push(s.clone()); } }
+    let n_subj = unique_subjects.len();
+
+    let mut unique_treatments: Vec<String> = Vec::new();
+    for t in &treatments { if !unique_treatments.contains(t) { unique_treatments.push(t.clone()); } }
+    let k_treat = unique_treatments.len();
+
+    if n_subj < 2 || k_treat < 2 {
+        return Err(R2Err {
+            msg: format!(
+                "aov(... + Error(...)): need at least 2 subjects and 2 treatments (got {} subjects, {} treatments)",
+                n_subj, k_treat
+            ),
+            kind: ErrKind::Runtime,
+        });
+    }
+
+    // ── 3. Means per subject, per treatment, grand mean ─────────────
+    let grand_mean: f64 = y.iter().sum::<f64>() / n_obs as f64;
+
+    let subj_idx = |s: &String| unique_subjects.iter().position(|u| u == s).unwrap_or(0);
+    let treat_idx = |t: &String| unique_treatments.iter().position(|u| u == t).unwrap_or(0);
+
+    let mut subj_sum = vec![0.0_f64; n_subj];
+    let mut subj_count = vec![0_usize; n_subj];
+    let mut treat_sum = vec![0.0_f64; k_treat];
+    let mut treat_count = vec![0_usize; k_treat];
+
+    for i in 0..n_obs {
+        let si = subj_idx(&subjects[i]);
+        let ti = treat_idx(&treatments[i]);
+        subj_sum[si] += y[i];
+        subj_count[si] += 1;
+        treat_sum[ti] += y[i];
+        treat_count[ti] += 1;
+    }
+    let subj_mean: Vec<f64> = subj_sum.iter().zip(&subj_count)
+        .map(|(s, c)| if *c == 0 { 0.0 } else { s / *c as f64 }).collect();
+    let treat_mean: Vec<f64> = treat_sum.iter().zip(&treat_count)
+        .map(|(s, c)| if *c == 0 { 0.0 } else { s / *c as f64 }).collect();
+
+    // ── 4. Sums of squares ─────────────────────────────────────────
+    let ss_total: f64 = y.iter().map(|v| (v - grand_mean).powi(2)).sum();
+    let ss_subj: f64 = (0..n_subj)
+        .map(|i| subj_count[i] as f64 * (subj_mean[i] - grand_mean).powi(2))
+        .sum();
+    let ss_treat: f64 = (0..k_treat)
+        .map(|j| treat_count[j] as f64 * (treat_mean[j] - grand_mean).powi(2))
+        .sum();
+    let ss_within = ss_total - ss_subj - ss_treat;
+
+    let df_subj = (n_subj - 1) as f64;
+    let df_treat = (k_treat - 1) as f64;
+    let df_within = ((n_subj - 1) * (k_treat - 1)) as f64;
+
+    let ms_subj = if df_subj > 0.0 { ss_subj / df_subj } else { 0.0 };
+    let ms_treat = if df_treat > 0.0 { ss_treat / df_treat } else { 0.0 };
+    let ms_within = if df_within > 0.0 { ss_within / df_within } else { 0.0 };
+
+    let f_treat = if ms_within > 1e-15 { ms_treat / ms_within } else { f64::INFINITY };
+
+    // Wilson–Hilferty F→z approximation (consistent with bi_aov).
+    let p_treat = if df_within > 0.0 && f_treat.is_finite() {
+        let v1 = df_treat; let v2 = df_within; let f = f_treat;
+        let z = ((f / v1).powf(1.0 / 3.0) * (1.0 - 2.0 / (9.0 * v2)) - (1.0 - 2.0 / (9.0 * v1)))
+            / ((f / v1).powf(2.0 / 3.0) / (9.0 * v2) + 1.0 / (9.0 * v1)).sqrt();
+        1.0 - phi(z)
+    } else { 1.0 };
+
+    // Treatment column name from the RHS (for the table row label).
+    let treat_name = match &rhs {
+        RVal::List(items) => items.iter()
+            .find(|(n, _)| !n.as_ref().map(|s| s.starts_with('~')).unwrap_or(true))
+            .and_then(|(n, _)| n.as_ref().map(|s| s.to_string()))
+            .unwrap_or_else(|| "treatment".to_string()),
+        _ => "treatment".to_string(),
+    };
+    let subj_name = match &err {
+        RVal::List(items) => items.iter()
+            .find(|(n, _)| !n.as_ref().map(|s| s.starts_with('~')).unwrap_or(true))
+            .and_then(|(n, _)| n.as_ref().map(|s| s.to_string()))
+            .unwrap_or_else(|| "subject".to_string()),
+        _ => "subject".to_string(),
+    };
+
+    // ── 5. Print R-compatible multi-stratum table ──────────────────
+    println!();
+    println!("Error: {}", subj_name);
+    println!("{:<15} {:>5} {:>12} {:>12} {:>10} {:>10}",
+        "Source", "Df", "Sum Sq", "Mean Sq", "F value", "Pr(>F)");
+    println!("{:<15} {:>5} {:>12} {:>12}",
+        "Residuals", n_subj - 1, fmt_num(ss_subj), fmt_num(ms_subj));
+
+    println!();
+    println!("Error: Within");
+    println!("{:<15} {:>5} {:>12} {:>12} {:>10} {:>10}",
+        "Source", "Df", "Sum Sq", "Mean Sq", "F value", "Pr(>F)");
+    let p_str = fmt_pval(p_treat);
+    let stars = signif_stars(p_treat);
+    println!("{:<15} {:>5} {:>12} {:>12} {:>10} {:>10} {}",
+        treat_name, k_treat - 1,
+        fmt_num(ss_treat), fmt_num(ms_treat),
+        fmt_num(f_treat), p_str, stars);
+    println!("{:<15} {:>5} {:>12} {:>12}",
+        "Residuals", (n_subj - 1) * (k_treat - 1),
+        fmt_num(ss_within), fmt_num(ms_within));
+    println!("Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1");
+
+    // ── 6. Return TypeInstance with structured fields ──────────────
+    let mut fields = HashMap::new();
+    fields.insert(Arc::from("type"), rstr("aov-rm"));
+    fields.insert(Arc::from("f.statistic"), rnum(f_treat));
+    fields.insert(Arc::from("p.value"), rnum(p_treat));
+    fields.insert(Arc::from("ss.subject"), rnum(ss_subj));
+    fields.insert(Arc::from("ss.treatment"), rnum(ss_treat));
+    fields.insert(Arc::from("ss.within"), rnum(ss_within));
+    fields.insert(Arc::from("ss.total"), rnum(ss_total));
+    fields.insert(Arc::from("df.subject"), rnum(df_subj));
+    fields.insert(Arc::from("df.treatment"), rnum(df_treat));
+    fields.insert(Arc::from("df.within"), rnum(df_within));
+    fields.insert(Arc::from("ms.subject"), rnum(ms_subj));
+    fields.insert(Arc::from("ms.treatment"), rnum(ms_treat));
+    fields.insert(Arc::from("ms.within"), rnum(ms_within));
+    fields.insert(Arc::from("n.subjects"), rnum(n_subj as f64));
+    fields.insert(Arc::from("n.treatments"), rnum(k_treat as f64));
+    if let Some(call_str) = gn(a, "_call") {
+        fields.insert(Arc::from("call"), call_str);
+    }
+    Ok(RVal::TypeInstance(TypeInstance {
+        type_name: Arc::from("aov"),
+        fields,
+    }))
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // anova — model ANOVA table; falls back to aov for non-model input
 // ─────────────────────────────────────────────────────────────────────
 
@@ -746,5 +1022,107 @@ mod tests {
             }
             _ => panic!("lm must return TypeInstance"),
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Phase R.S.1 — Repeated-measures ANOVA tests.
+    // ─────────────────────────────────────────────────────────────────
+
+    fn chars(v: &[&str]) -> RVal {
+        RVal::Character(v.iter().map(|s| Some(Arc::from(*s))).collect(), Attrs::default())
+    }
+
+    /// Build the synthetic formula-list shape that aov_repeated_measures
+    /// expects: items contain ~lhs, ~rhs, ~class, and ~error.
+    fn rm_formula(y: RVal, treat_name: &str, treat: RVal, subj_name: &str, subj: RVal) -> RVal {
+        RVal::List(vec![
+            (Some(Arc::from("~lhs")),
+                RVal::List(vec![(Some(Arc::from("y")), y)])),
+            (Some(Arc::from("~rhs")),
+                RVal::List(vec![(Some(Arc::from(treat_name)), treat)])),
+            (Some(Arc::from("~class")),
+                RVal::Character(vec![Some(Arc::from("formula"))], Attrs::default())),
+            (Some(Arc::from("~error")),
+                RVal::List(vec![(Some(Arc::from(subj_name)), subj)])),
+        ])
+    }
+
+    #[test]
+    fn rm_aov_matches_hand_computation_for_5x2_design() {
+        // 5 subjects × 2 treatments (A, B). Hand-computed expected:
+        //   SS_subject   = 9.60   df=4   MS=2.40
+        //   SS_treatment = 14.4   df=1   MS=14.4
+        //   SS_within    = 5.60   df=4   MS=1.40
+        //   F_treatment  = (14.4/1) / (5.6/4) = 10.2857
+        let y = nums(&[10.0, 12.0, 8.0, 11.0, 12.0, 13.0, 9.0, 14.0, 11.0, 12.0]);
+        let treat = chars(&["A","B","A","B","A","B","A","B","A","B"]);
+        let subj = nums(&[1.0,1.0,2.0,2.0,3.0,3.0,4.0,4.0,5.0,5.0]);
+        let formula = rm_formula(y, "treatment", treat, "subject", subj);
+
+        // The repeated-measures branch in bi_aov triggers when `data` is
+        // present and the formula contains `~error`. Inject a dummy data
+        // arg so the branch fires.
+        let dummy_df = RVal::DataFrame(r2_types::DataFrame {
+            columns: vec![], row_names: None,
+        });
+        let r = bi_aov(&[
+            evarg(formula),
+            EvalArg { name: Some(Arc::from("data")), value: dummy_df },
+        ]).unwrap();
+
+        match r {
+            RVal::TypeInstance(inst) => {
+                assert_eq!(inst.type_name.as_ref(), "aov");
+                let get = |k: &str| inst.fields.get(k).unwrap().scalar_f64().unwrap().unwrap();
+                assert!((get("ss.subject")   - 9.60).abs() < 1e-9, "ss.subject = {}", get("ss.subject"));
+                assert!((get("ss.treatment") - 14.4).abs() < 1e-9, "ss.treatment = {}", get("ss.treatment"));
+                assert!((get("ss.within")    -  5.6).abs() < 1e-9, "ss.within = {}", get("ss.within"));
+                assert!((get("df.subject")   -  4.0).abs() < 1e-12);
+                assert!((get("df.treatment") -  1.0).abs() < 1e-12);
+                assert!((get("df.within")    -  4.0).abs() < 1e-12);
+                let f = get("f.statistic");
+                assert!((f - 10.285714).abs() < 1e-4, "F = {}", f);
+                let p = get("p.value");
+                assert!((0.0..=1.0).contains(&p), "p out of range: {}", p);
+                // F(1,4)=10.29 corresponds to p around 0.033 by exact CDF;
+                // Wilson-Hilferty here gives ~0.0048. Bound is permissive.
+                assert!(p < 0.05, "p should be < 0.05 for F=10.29, got {}", p);
+            }
+            _ => panic!("aov(...+Error(...)) must return TypeInstance"),
+        }
+    }
+
+    #[test]
+    fn rm_aov_errors_when_fewer_than_2_subjects() {
+        // One subject, two treatments — degenerate; should error cleanly.
+        let y = nums(&[1.0, 2.0]);
+        let treat = chars(&["A", "B"]);
+        let subj = nums(&[1.0, 1.0]);
+        let formula = rm_formula(y, "treatment", treat, "subject", subj);
+        let dummy_df = RVal::DataFrame(r2_types::DataFrame {
+            columns: vec![], row_names: None,
+        });
+        let r = bi_aov(&[
+            evarg(formula),
+            EvalArg { name: Some(Arc::from("data")), value: dummy_df },
+        ]);
+        assert!(r.is_err(), "should error with only 1 subject");
+    }
+
+    #[test]
+    fn rm_aov_errors_on_mismatched_lengths() {
+        // y has 4 entries but subject only 3 — length mismatch.
+        let y = nums(&[1.0, 2.0, 3.0, 4.0]);
+        let treat = chars(&["A","B","A","B"]);
+        let subj = nums(&[1.0, 1.0, 2.0]); // length 3, not 4
+        let formula = rm_formula(y, "treatment", treat, "subject", subj);
+        let dummy_df = RVal::DataFrame(r2_types::DataFrame {
+            columns: vec![], row_names: None,
+        });
+        let r = bi_aov(&[
+            evarg(formula),
+            EvalArg { name: Some(Arc::from("data")), value: dummy_df },
+        ]);
+        assert!(r.is_err(), "should error on length mismatch");
     }
 }

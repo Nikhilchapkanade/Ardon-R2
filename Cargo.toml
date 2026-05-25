@@ -25,3 +25,16 @@ members = [
 
 [workspace.dependencies]
 thiserror = "1"
+
+# ── Release profile — optimized for the shipped installer ─────────────
+# strip = "symbols"   drops debug symbols                  → ~5 MB binary
+# lto   = "fat"       cross-crate inlining                 → ~10–20% smaller, faster
+# codegen-units = 1   single codegen unit allows full LTO  → ~5% smaller
+# panic = "abort"     skip unwinding tables                → smaller, faster panics
+# opt-level = 3       maximum performance optimization
+[profile.release]
+strip = "symbols"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = 3

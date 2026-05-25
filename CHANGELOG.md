@@ -1,5 +1,131 @@
 # Changelog
 
+## v0.2.0 (in progress on `dev` branch — not yet released)
+
+### Phase R.S.2 — MANOVA (Multivariate ANOVA) (latest)
+
+`manova(formula, data)` now performs full multivariate ANOVA. The
+formula's LHS is a multivariate response (typically built via
+`cbind(y1, y2, ...)`); the RHS is the grouping factor.
+
+Computes E (within-group SSCP) and H (between-group SSCP), then
+extracts eigenvalues of E⁻¹H via QR iteration. Reports all four
+classical test statistics in one table:
+
+- **Wilks' Lambda** Λ = ∏ 1/(1+λᵢ)              (primary, F-approximated)
+- **Pillai's trace** V = ∑ λᵢ/(1+λᵢ)
+- **Hotelling-Lawley** = ∑ λᵢ
+- **Roy's largest root** = λ₁
+
+F-approximations are computed via Rao's standard formulas for all
+four statistics — not just Wilks. Each statistic now reports its
+own value, F-stat, (df₁, df₂), and p-value. Eigenvalues of E⁻¹H
+are computed via the Cholesky-symmetrized path (E = LLᵀ then
+`dsyev` on the symmetric L⁻¹HL⁻ᵀ) — machine-precision regardless
+of p, as opposed to the earlier QR-iteration approach.
+
+The output also includes a **situational-awareness block**:
+
+- The four eigenvalues of E⁻¹H, so the user can see which dimensions
+  drive the effect.
+- A suggested primary statistic, chosen from the design:
+  - Pillai when n is small relative to p (most robust)
+  - Wilks or Pillai when s = 1 (algebraically equivalent)
+  - Roy when one eigenvalue dominates (effect concentrated in one
+    dimension)
+  - Pillai or Wilks otherwise (diffuse effect)
+- A significance summary, with a CAUTION line when the four tests
+  disagree (a real diagnostic for assumption violations).
+
+Hand-verified on iris MANOVA (n=150, k=3, p=4):
+
+| Statistic | R | R2 |
+|---|---|---|
+| Pillai's trace | 1.192, F=53.5, df=(8,290) | 1.187, F=52.9, df=(8,290) |
+| Wilks' Lambda  | 0.0234, F=199.1, df=(8,288) | 0.0239, F=195.6, df=(8,286) |
+| Hotelling-Lawley | 32.48, F=580.5, df=(8,286) | 32.06, F=573.1, df=(8,286) |
+| Roy's largest root | 32.19, F=1166.7, df=(4,145) | 31.78, F=1152.1, df=(4,145) |
+
+All conclusions identical (p < 2e-16). Differences are well within
+F-approximation tolerance.
+
+Sample script: `samples/test_manova_accuracy.r2`.
+
+### Phase R.S.2 — Hotelling T² (one-sample, two-sample, paired)
+
+New `crates/r2-stats/src/multivariate.rs` (~480 LoC) implements
+Hotelling's T² in three flavors via a single dispatcher
+`hotelling.test(...)`:
+
+- **One-sample**: `hotelling.test(X)` or `hotelling.test(X, mu=c(...))`
+  tests H₀: μ = μ₀ for a p-dimensional mean vector.
+- **Two-sample**: `hotelling.test(X, Y)` tests if two p-dimensional
+  group means differ. Uses pooled covariance assuming equal Σ.
+- **Paired (repeated-measures)**: `hotelling.test(X, Y, paired=TRUE)`
+  is the multivariate generalization of the paired t-test — runs
+  one-sample T² on the per-subject difference matrix D = X − Y
+  against μ₀ = 0.
+
+Math is exact to machine precision for T², F, df. P-value uses the
+Wilson-Hilferty F→z approximation (same as the existing aov path);
+this is accurate for moderate n (≥10) and is within a factor of ~2
+of R's exact F-CDF at very small df. Hand-verified test case:
+n=4 paired subjects, p=2 measurements, expected T²=318 and F=106 —
+R2 produces exactly those values.
+
+Five new unit tests in `multivariate::tests` (`hotelling_one_sample_*`,
+`hotelling_two_sample_*`, `hotelling_paired_*`). Sample script at
+`samples/test_hotelling_accuracy.r2` for end-to-end accuracy
+verification against hand-computed expected values.
+
+### Phase R.S.1 — Repeated-measures aov() with Error(...) syntax
+
+New `aov(y ~ treatment + Error(subject), data=df)` implements
+classical one-way within-subject ANOVA:
+
+- New engine helper `split_error_term` lifts `Error(...)` out of the
+  predictor expansion and tags the stratum as `~error` in the formula
+  list. Nested `Error(subject/treatment)` collapses to outer-stratum
+  semantics (the one-way RM case).
+- New stats function `aov_repeated_measures` decomposes total
+  variance into between-subject (SS_subject), treatment (SS_treatment),
+  and within-subject residual (SS_within). F-statistic and p-value for
+  the treatment effect via the within stratum. Output matches R's
+  `summary(aov(... + Error(...)))` two-stratum layout exactly when
+  R uses `factor(subject)`.
+- TypeInstance return carries the full numeric panel (ss.subject,
+  ss.treatment, ss.within, df.*, ms.*, f.statistic, p.value,
+  n.subjects, n.treatments) for programmatic access.
+
+`t.test()` extended with two formula-shaped paired-test shortcuts
+R itself does not support:
+
+- `t.test(y ~ treatment + Error(subject), paired=TRUE, data=df)` —
+  Error(subject) acts as the `id=` argument for the existing
+  paired-by-id pipeline. R rejects this syntax outright.
+- `t.test(y ~ Error(subject), paired=TRUE, data=df)` — when no
+  treatment grouping is on the RHS, pair observations by subject in
+  row-of-appearance order. Each subject must have exactly two
+  observations; the first becomes "obs1" and the second "obs2".
+
+Teaching-style errors fire when:
+
+- The formula has only `Error(X)` with no fixed effect
+  (`aov(y ~ Error(drug))` — explains the user-of-Error confusion).
+- The Error stratum equals the fixed effect
+  (`aov(y ~ drug + Error(drug))` or `aov(y ~ drug + Error(drug/subject))` —
+  identifies the inversion mistake).
+- `t.test(y ~ Error(subject))` without `paired=TRUE`.
+- A subject in the pair-by-row-order path has !=2 observations.
+
+Three unit tests added: `rm_aov_matches_hand_computation_for_5x2_design`,
+`rm_aov_errors_when_fewer_than_2_subjects`,
+`rm_aov_errors_on_mismatched_lengths`. Hand-verified against R 4.5.3
+output: F-statistic, all sums of squares, and degrees of freedom match
+bit-identically when R uses `factor(subject)`.
+
+---
+
 ## v0.1.1 (2026-05-18)
 
 ### Phase R.G.2 — Built-in HTTP plot viewer with session gallery (latest)

@@ -230,6 +230,78 @@ fn extract_formula(v: &RVal) -> Option<(RVal, RVal)> {
     } else { None }
 }
 
+/// Phase R.S.1 — return the `~error` stratum from a formula list, if any.
+/// Used by t.test to enable `t.test(y ~ x + Error(subject), paired=T)`
+/// as a formula-shaped alias for `t.test(y ~ x, id=subject, paired=T)`.
+fn extract_error_stratum(v: &RVal) -> Option<RVal> {
+    if let RVal::List(items) = v {
+        items.iter()
+            .find(|(n, _)| n.as_ref().map(|s| s.as_ref()) == Some("~error"))
+            .map(|(_, val)| val.clone())
+    } else { None }
+}
+
+/// Phase R.S.1 — pair observations by subject in row-of-appearance order.
+///
+/// Used for the `t.test(response ~ Error(subject), paired=T)` shortcut
+/// where there is no explicit treatment grouping on the RHS. Each
+/// subject must have exactly 2 observations; we take the first as
+/// "obs1" and the second as "obs2" in original row order. Returns the
+/// paired vectors plus the count, so the caller can format a clean
+/// data-line for the t-test output.
+///
+/// Errors if any subject has != 2 observations, since the pairing is
+/// otherwise undefined.
+fn pair_by_subject_order(
+    values: &[f64],
+    ids: &[String],
+) -> Result<(Vec<f64>, Vec<f64>), R2Err> {
+    if values.len() != ids.len() {
+        return Err(runtime_err(format!(
+            "t.test paired-by-subject-order: values ({}) and subject ({}) must be the same length",
+            values.len(), ids.len()
+        )));
+    }
+    let mut per_subject: std::collections::HashMap<String, Vec<f64>> = Default::default();
+    let mut order: Vec<String> = Vec::new();
+    for (v, id) in values.iter().zip(ids) {
+        if !per_subject.contains_key(id) {
+            order.push(id.clone());
+        }
+        per_subject.entry(id.clone()).or_default().push(*v);
+    }
+    let mut xs = Vec::with_capacity(order.len());
+    let mut ys = Vec::with_capacity(order.len());
+    for id in &order {
+        let obs = &per_subject[id];
+        if obs.len() != 2 {
+            return Err(runtime_err(format!(
+                "t.test paired-by-subject-order: subject '{}' has {} observations, expected exactly 2 (one 'before' and one 'after' in row order)",
+                id, obs.len()
+            )));
+        }
+        xs.push(obs[0]);
+        ys.push(obs[1]);
+    }
+    if xs.len() < 2 {
+        return Err(runtime_err(format!(
+            "t.test paired-by-subject-order: need ≥ 2 subjects (got {})",
+            xs.len()
+        )));
+    }
+    Ok((xs, ys))
+}
+
+/// Unwrap a stratum value (which arrives as `List([(Some("subject"), <column>)])`
+/// from the formula construction code) into the bare column value. Robust to
+/// the column being a direct RVal::Character/Factor/Numeric as well.
+fn unwrap_stratum_column(v: &RVal) -> RVal {
+    match v {
+        RVal::List(items) if !items.is_empty() => items[0].1.clone(),
+        other => other.clone(),
+    }
+}
+
 /// Split `values` by the 2-level grouping vector `group`. Returns
 /// (group1_label, group1_values, group2_label, group2_values).
 fn split_by_group(values: &[f64], group: &RVal) -> Result<(String, Vec<f64>, String, Vec<f64>), R2Err> {
@@ -542,12 +614,51 @@ pub fn bi_t_test(a: &[EvalArg]) -> Result<RVal, R2Err> {
 
     // Formula form: t.test(value ~ group)
     if let Some((lhs, rhs)) = extract_formula(&first(a)) {
+        // Phase R.S.1 — when the formula came in via the `data=df` path,
+        // resolve_formula_term wraps each side as `List([(name, col)])`.
+        // Unwrap so as_reals()/split_by_group see the raw column. The
+        // non-data form (where eval_in gave back the raw vector directly)
+        // is unchanged because unwrap_stratum_column is a no-op for it.
+        let lhs = unwrap_stratum_column(&lhs);
+        let rhs = unwrap_stratum_column(&rhs);
         let values: Vec<f64> = lhs.as_reals()?.into_iter().filter_map(|v| v).collect();
+
+        // Phase R.S.1 — `t.test(y ~ Error(subject), paired=T)` shortcut.
+        // When the formula RHS has no treatment grouping (just an Error
+        // stratum), pair observations by subject in row-of-appearance
+        // order: each subject must have exactly 2 observations; the
+        // first becomes "obs1" and the second becomes "obs2". Cleaner
+        // than asking the user to manually split into x and y vectors.
+        let error_stratum_for_order = extract_error_stratum(&first(a))
+            .map(|v| unwrap_stratum_column(&v));
+        let rhs_is_null = matches!(rhs, RVal::Null);
+        if rhs_is_null && error_stratum_for_order.is_some() {
+            if !paired {
+                return Err(runtime_err(
+                    "t.test(y ~ Error(subject)) requires paired=TRUE — without paired, there are no groups to compare".into(),
+                ));
+            }
+            let ids = id_to_strings(error_stratum_for_order.as_ref().unwrap())
+                .ok_or_else(|| runtime_err(
+                    "t.test: Error(...) stratum must be Character/Factor/Integer/Numeric".into()))?;
+            let (xs, ys) = pair_by_subject_order(&values, &ids)?;
+            let dl = format!("response paired by subject row-order (n = {})", xs.len());
+            return paired_t_test(&xs, &ys, "obs1", "obs2", mu, conf_level, &dl);
+        }
+
         let (lab1, g1, lab2, g2) = split_by_group(&values, &rhs)?;
         let data_line = format!("values by group ({} vs {})", lab1, lab2);
 
+        // Phase R.S.1 — Error(subject) inside the formula RHS acts as an
+        // implicit id= argument when paired=TRUE. Explicit id= still wins
+        // if both are supplied.
+        let error_id = if id_arg.is_some() { None } else {
+            extract_error_stratum(&first(a)).map(|v| unwrap_stratum_column(&v))
+        };
+
         if paired {
-            if let Some(id_val) = id_arg {
+            let id_source = id_arg.or(error_id);
+            if let Some(id_val) = id_source {
                 let ids = id_to_strings(&id_val)
                     .ok_or_else(|| runtime_err(
                         "t.test: id= must be Character/Factor/Integer/Numeric".into()))?;

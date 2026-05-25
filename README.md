@@ -99,7 +99,10 @@ cargo build --release
 
 ## Features at a Glance
 
-- **197 built-in functions** — no packages to install
+- **216 built-in functions** — no packages to install
+- **Repeated-measures ANOVA** — `aov(y ~ x + Error(subject), data=df)`, R-bit-identical
+- **Hotelling's T²** — one-sample, two-sample, and paired/multivariate variants
+- **MANOVA** — `manova(cbind(y1, y2) ~ group, data=df)` with all four classical statistics
 - **12 ML algorithms** — decision tree, random forest, gradient boosting, KNN, PCA, K-means, Naive Bayes
 - **Formula syntax with factor expansion** — `lm(mpg ~ factor(cyl) + wt, data = mtcars)`
 - **In-memory graphics device + full `par()`** — `par(mfrow=c(2,2))` multi-panel layouts, `dev.off()`, `save_plot(path)`
@@ -113,12 +116,33 @@ cargo build --release
 ## Statistics
 
 ```r
+# Linear and generalized linear models
 model <- lm(mpg ~ wt + hp, data = mtcars)
 coef(model)
 summary(model)
 glm(y ~ x, data = df, family = "binomial")
+
+# Hypothesis tests
 t.test(x, mu = 0)
+t.test(y ~ group, data = df)            # Welch two-sample
 cor(x, y)
+
+# Repeated-measures ANOVA (R-bit-identical when R uses factor(subject))
+aov(response ~ treatment + Error(subject), data = df)
+
+# Paired t-test through formula + Error syntax (extension over R)
+t.test(response ~ treatment + Error(subject), paired = TRUE, data = df)
+
+# Multivariate hypothesis testing — Hotelling's T²
+hotelling.test(X)                       # one-sample,  H0: mu = 0
+hotelling.test(X, mu = c(0, 0))         # one-sample,  H0: mu = mu0
+hotelling.test(A, B)                    # two-sample,  H0: mu_A = mu_B
+hotelling.test(X, Y, paired = TRUE)     # paired/multivariate paired
+
+# MANOVA — multivariate ANOVA
+manova(cbind(Sepal.Length, Sepal.Width, Petal.Length, Petal.Width) ~ Species,
+       data = iris)
+# Reports Wilks' Lambda, Pillai, Hotelling-Lawley, Roy's largest root.
 ```
 
 ## Machine Learning

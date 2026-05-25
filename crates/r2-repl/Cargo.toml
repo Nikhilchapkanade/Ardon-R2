@@ -16,3 +16,11 @@ r2-engine = { path = "../r2-engine" }
 # interrupt flag so users can abort runaway evaluations and return to
 # the R2> prompt without killing the process. Phase R.M.2.
 ctrlc = { version = "3", default-features = false }
+
+# build.rs converts assets/logo.png → multi-res ICO and embeds it as the
+# Windows exe icon. Build-only deps; no impact on the runtime binary.
+[build-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+ico   = "0.4"
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

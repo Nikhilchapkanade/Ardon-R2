@@ -43,6 +43,20 @@ notes.md
 TODO.local.md
 scratch/
 
+# ─── Installer artifacts (auto-generated; do not commit) ────────────
+
+# The compiled installer .exe — recreated by Inno Setup from .iss + r2.ico
+installer/Output/
+
+# Auto-generated icon: build.rs converts assets/logo.png → installer/r2.ico
+# on every release build. The source of truth is assets/logo.png.
+installer/r2.ico
+
+# Debug preview written by build.rs so we can eyeball the cropped icon
+# without opening the .ico file. Regenerated every build.
+installer/icon-256-preview.png
+installer/icon-check.png
+
 # Plot/output files emitted by REPL sessions and tests
 out_*.svg
 out_*.png

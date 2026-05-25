@@ -227,6 +227,9 @@ impl Engine {
             // library/detach/require are CORE — no addon can override them
             ("library",bi_library),("detach",bi_detach),("require",bi_require),
             ("installed.packages",bi_installed_packages),(".libPaths",bi_lib_paths),
+            ("install.from.dir",bi_install_from_dir),("install.from.zip",bi_install_from_zip),
+            ("install.from.github",bi_install_from_github),("uninstall",bi_uninstall),
+            ("install.packages",bi_install_packages),
         ]));
 
         // ── BASE: can be masked by addons, can be detached ───────────
@@ -274,6 +277,25 @@ impl Engine {
             // row/col operations
             ("rowSums",bi_rowSums),("colSums",bi_colSums),("rowMeans",bi_rowMeans),("colMeans",bi_colMeans),
             ("set.seed",bi_set_seed),("Sys.sleep",bi_Sys_sleep),("readline",bi_readline),
+                ("as.Date",bi_as_date),("as.POSIXct",bi_as_posixct),("format.Date",bi_format_time),
+                ("format.POSIXct",bi_format_time),("Sys.Date",bi_sys_date),("Sys.time",bi_sys_time),
+                ("difftime",bi_difftime),
+                ("ts",bi_ts),("tsp",bi_tsp),("start",bi_ts_start),("end",bi_ts_end),
+                ("frequency",bi_frequency),("deltat",bi_deltat),("time",bi_time_idx),
+                ("cycle",bi_cycle),("window",bi_window),("is.ts",bi_is_ts),
+                ("xts",bi_xts),("index",bi_index),("coredata",bi_coredata),("is.xts",bi_is_xts),
+                ("xts.subset",bi_xts_subset),("first",bi_first),("last",bi_last),
+                ("na.locf",bi_na_locf),("merge.xts",bi_merge_xts),
+                ("acf",bi_acf),("pacf",bi_pacf),("decompose",bi_decompose),
+                ("is.regular",bi_is_regular),("periodicity",bi_periodicity),
+                ("lag",bi_lag),("diff_ts",bi_diff_ts),
+                ("to.daily",bi_to_daily),("to.weekly",bi_to_weekly),
+                ("to.monthly",bi_to_monthly),("to.quarterly",bi_to_quarterly),
+                ("to.yearly",bi_to_yearly),
+                ("apply.daily",bi_apply_daily),("apply.weekly",bi_apply_weekly),
+                ("apply.monthly",bi_apply_monthly),("apply.quarterly",bi_apply_quarterly),
+                ("apply.yearly",bi_apply_yearly),
+                ("tithi",bi_tithi),("hindu.date",bi_hindu_date),("hnc.date",bi_hnc_date),
         ]));
         e.registry.add_layer(mkpkg("stats", PackageTier::Base, vec![
             ("sum",bi_sum),("mean",bi_mean),("sd",bi_sd),("var",bi_var),("cor",bi_cor),("cov",bi_cov),
@@ -284,7 +306,7 @@ impl Engine {
             // more stats
             ("median",bi_median),("quantile",bi_quantile),
             // hypothesis tests
-            ("t.test",bi_t_test),("chisq.test",bi_chisq_test),
+            ("t.test",bi_t_test),("chisq.test",bi_chisq_test),("hotelling.test",bi_hotelling_test),("manova",bi_manova),("lmer",bi_lmer),
             // model accessors
             ("predict",bi_predict),("residuals",bi_residuals),("fitted",bi_fitted),("coef",bi_coef),
             ("glm",bi_glm),("confint",bi_confint),("binomial",bi_binomial),("gaussian",bi_gaussian),("poisson",bi_poisson),("subset",bi_subset),("transform",bi_transform),
@@ -542,7 +564,7 @@ impl Engine {
                     // NSE for formula-based functions: lm(y ~ x, data = df)
                     // When first arg is a tilde expr and data= is provided,
                     // resolve bare symbol names as columns in the data frame
-                    if matches!(fname.as_ref(), "lm" | "glm" | "t.test" | "rpart" | "rf" | "gbm" | "cv" | "aov") {
+                    if matches!(fname.as_ref(), "lm" | "glm" | "t.test" | "rpart" | "rf" | "gbm" | "cv" | "aov" | "manova" | "lmer") {
                         if let Some(first_arg) = args.first() {
                             if let Expr::Binary { op: BinOp::Tilde, lhs, rhs } = &first_arg.value {
                                 // Check if data= is provided
@@ -605,14 +627,37 @@ impl Engine {
                                             }
                                             return self.call_fn(&f, &ea, env);
                                         } else {
-                                            // Named columns: resolve normally
+                                            // Named columns: resolve normally.
+                                            // Phase R.S.1 — split out any Error(...) stratum first so
+                                            // it does not get treated as a regular predictor. The
+                                            // resulting `rhs_fixed` is the predictor expression with
+                                            // the Error term removed; `error_stratum_expr` (if any)
+                                            // is what was inside Error(...).
+                                            // Phase R.S.3 — also split out (1|group) random-effect
+                                            // specs after the Error split, so lmer-style formulas
+                                            // like y ~ x + (1|subject) work cleanly.
+                                            let (rhs_no_err, error_stratum_expr) = split_error_term(rhs);
+                                            let (rhs_fixed, random_grouping_exprs) = split_random_effects(&rhs_no_err);
                                             let lhs_val = self.resolve_formula_term(lhs, df, env)?;
-                                            let rhs_val = self.resolve_formula_term(rhs, df, env)?;
-                                            let formula = RVal::List(vec![
+                                            let rhs_val = if matches!(rhs_fixed, Expr::NullLit) {
+                                                RVal::Null
+                                            } else {
+                                                self.resolve_formula_term(&rhs_fixed, df, env)?
+                                            };
+                                            let mut formula_items = vec![
                                                 (Some(Arc::from("~lhs")), lhs_val),
                                                 (Some(Arc::from("~rhs")), rhs_val),
                                                 (Some(Arc::from("~class")), rstr("formula")),
-                                            ]);
+                                            ];
+                                            if let Some(stratum_expr) = error_stratum_expr {
+                                                let stratum_val = self.resolve_formula_term(&stratum_expr, df, env)?;
+                                                formula_items.push((Some(Arc::from("~error")), stratum_val));
+                                            }
+                                            for group_expr in &random_grouping_exprs {
+                                                let group_val = self.resolve_formula_term(group_expr, df, env)?;
+                                                formula_items.push((Some(Arc::from("~random_intercept")), group_val));
+                                            }
+                                            let formula = RVal::List(formula_items);
                                             let f = self.eval_in(func, env)?;
                                             let mut ea = vec![EvalArg { name: None, value: formula }];
                                             for a in args.iter().skip(1) {
@@ -668,8 +713,54 @@ impl Engine {
                 }
             }
             Expr::If { cond, then, else_ } => { let c = self.eval_in(cond, env)?; if self.truthy(&c)? { self.eval_in(then, env) } else if let Some(e) = else_ { self.eval_in(e, env) } else { Ok(RVal::Null) } }
-            Expr::For { var, iter, body } => { let iv = self.eval_in(iter, env)?; for item in self.to_items(&iv)? { self.scope_insert(var.clone(), item); match self.eval_in(body, env) { Err(R2Err { kind: ErrKind::CtrlBreak, .. }) => break, Err(R2Err { kind: ErrKind::CtrlNext, .. }) => continue, Err(e) => return Err(e), _ => {} } } Ok(RVal::Null) }
-            Expr::While { cond, body } => { loop { let c = self.eval_in(cond, env)?; if !self.truthy(&c)? { break; } match self.eval_in(body, env) { Err(R2Err { kind: ErrKind::CtrlBreak, .. }) => break, Err(R2Err { kind: ErrKind::CtrlNext, .. }) => continue, Err(e) => return Err(e), _ => {} } } Ok(RVal::Null) }
+            Expr::For { var, iter, body } => {
+                // Phase R.T.4-fix — top-level for-loops must re-snapshot env
+                // from `self.global_env` each iteration, because subscript
+                // assignments (`x[i] <- ...`) write through `env_insert` which
+                // replaces the Arc; the body's captured env would otherwise
+                // see the pre-loop value of every variable on each iteration.
+                // Inside function bodies, writes go to `local_scopes`, which
+                // Symbol-lookup checks first, so the original env still works.
+                let iv = self.eval_in(iter, env)?;
+                let at_top_level = self.local_scopes.is_empty();
+                for item in self.to_items(&iv)? {
+                    self.scope_insert(var.clone(), item);
+                    let body_env_owned;
+                    let body_env: &EnvRef = if at_top_level {
+                        body_env_owned = self.global_env.clone();
+                        &body_env_owned
+                    } else {
+                        env
+                    };
+                    match self.eval_in(body, body_env) {
+                        Err(R2Err { kind: ErrKind::CtrlBreak, .. }) => break,
+                        Err(R2Err { kind: ErrKind::CtrlNext, .. }) => continue,
+                        Err(e) => return Err(e),
+                        _ => {}
+                    }
+                }
+                Ok(RVal::Null)
+            }
+            Expr::While { cond, body } => {
+                // Same top-level re-snapshot rule as For.
+                let at_top_level = self.local_scopes.is_empty();
+                loop {
+                    let cond_env_owned;
+                    let cur_env: &EnvRef = if at_top_level {
+                        cond_env_owned = self.global_env.clone();
+                        &cond_env_owned
+                    } else { env };
+                    let c = self.eval_in(cond, cur_env)?;
+                    if !self.truthy(&c)? { break; }
+                    match self.eval_in(body, cur_env) {
+                        Err(R2Err { kind: ErrKind::CtrlBreak, .. }) => break,
+                        Err(R2Err { kind: ErrKind::CtrlNext, .. }) => continue,
+                        Err(e) => return Err(e),
+                        _ => {}
+                    }
+                }
+                Ok(RVal::Null)
+            }
             Expr::Match { expr: e, arms } => { let val = self.eval_in(e, env)?; for arm in arms { for pat in &arm.patterns { let pv = self.eval_in(pat, env)?; if self.vals_eq(&val, &pv) { return self.eval_in(&arm.body, env); } } } err!(Runtime, "no matching pattern") }
             Expr::FuncDef { params, body } | Expr::Lambda { params, body } => Ok(RVal::Closure(Closure { params: params.clone(), body: Arc::new((**body).clone()), env: env.clone() })),
             Expr::TypeDef { name, fields, parent } => { let td = TypeDef { name: name.clone(), fields: fields.clone(), parent: parent.clone() }; self.types.insert(name.clone(), td.clone()); env_insert(&mut self.global_env, name.clone(), RVal::TypeDef(td.clone())); Ok(RVal::TypeDef(td)) }
@@ -1438,6 +1529,144 @@ fn combine_ternary_output(
 /// generic placeholder `Call: lm(formula)`. Covers symbols, numeric
 /// literals, binary/unary operators, function calls, and indexing —
 /// the subset needed for typical model formulas.
+// ─────────────────────────────────────────────────────────────────────
+// Phase R.S.1 — Error(...) term splitter for repeated-measures formulas.
+//
+// In R's aov() syntax, `y ~ x + Error(subject/treatment)` declares that
+// `x` is the fixed effect and `Error(subject/treatment)` defines the
+// random-effect stratum for within-subject ANOVA. The Error term must
+// be lifted out of the predictor expansion (otherwise it would try to
+// resolve "Error" as a builtin and fail) and tagged separately so the
+// stats engine can build per-stratum sums of squares later in R.S.1.
+//
+// `split_error_term` walks the RHS expression tree and returns
+// `(fixed_part, optional_stratum_expr)`. The fixed part is the RHS with
+// any Error(...) subexpressions removed; the stratum is whatever was
+// inside the Error() call. When no Error() is present, the result is
+// `(rhs, None)` and behavior is unchanged.
+// ─────────────────────────────────────────────────────────────────────
+
+fn is_error_call(func: &Expr) -> bool {
+    matches!(func, Expr::Symbol(s) if s.as_ref() == "Error")
+}
+
+/// Unwrap `subject/treatment` style nested Error specifications to the
+/// outermost grouping factor (the wholeplot stratum). For Phase R.S.1
+/// this is the only stratum we use — the full split-plot decomposition
+/// across multiple within-subject factors lands in v0.2.1. Accepting
+/// the syntax with one-way semantics matches R's behavior in the common
+/// case where each subject sees every treatment level.
+fn unwrap_nested_error(stratum: Expr) -> Expr {
+    match stratum {
+        Expr::Binary { op: BinOp::Div, lhs, .. } => unwrap_nested_error(*lhs),
+        other => other,
+    }
+}
+
+fn split_error_term(rhs: &Expr) -> (Expr, Option<Expr>) {
+    match rhs {
+        // Degenerate: the entire RHS is Error(...). Fixed part becomes NullLit.
+        // Nested `Error(subject/treatment)` collapses to `Error(subject)` for
+        // the one-way repeated-measures case.
+        Expr::Call { func, args } if is_error_call(func) => {
+            let raw = args
+                .first()
+                .map(|a| a.value.clone())
+                .unwrap_or(Expr::NullLit);
+            let stratum = unwrap_nested_error(raw);
+            (Expr::NullLit, Some(stratum))
+        }
+        // Compound: walk both sides of `+` recursively, combine.
+        Expr::Binary { op: BinOp::Add, lhs, rhs: r } => {
+            let (l_fixed, l_err) = split_error_term(lhs);
+            let (r_fixed, r_err) = split_error_term(r);
+            let l_null = matches!(l_fixed, Expr::NullLit);
+            let r_null = matches!(r_fixed, Expr::NullLit);
+            let combined = match (l_null, r_null) {
+                (true, true) => Expr::NullLit,
+                (true, false) => r_fixed,
+                (false, true) => l_fixed,
+                (false, false) => Expr::Binary {
+                    op: BinOp::Add,
+                    lhs: Box::new(l_fixed),
+                    rhs: Box::new(r_fixed),
+                },
+            };
+            (combined, l_err.or(r_err))
+        }
+        // Leaf or non-Add expression: no Error possible here, pass through.
+        other => (other.clone(), None),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase R.S.3 — Random-effect specification splitter for lmer formulas.
+//
+// `lmer(y ~ x + (1|subject), data=df)` declares a random intercept per
+// subject. In R2's parser the `|` is parsed as BinOp::Or, so the inner
+// expression `(1|subject)` becomes Binary{Or, NumLit(1), Symbol(subject)}.
+//
+// For v0.2.0 Tier 1 we support only intercept-only random effects:
+// `(1|group)`. Random slopes `(1+x|group)`, crossed effects
+// `(1|s) + (1|item)`, and nested `(1|s/cohort)` are R.S.4 work.
+//
+// `split_random_effects` walks the RHS, lifts `(1|group)` subexpressions
+// into a separate list, and returns the fixed-effect remainder.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Returns true if `expr` matches the `(1|group)` random-intercept shape:
+/// Binary { Or, lhs = NumLit(1.0), rhs = <grouping expression> }.
+fn is_random_intercept(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Binary { op: BinOp::Or, lhs, .. }
+            if matches!(lhs.as_ref(), Expr::NumLit(n) if (n - 1.0).abs() < 1e-12)
+    )
+}
+
+/// Extract the grouping-factor expression from a `(1|group)` random-effect
+/// spec. Returns None if `expr` is not a random-intercept shape.
+fn random_intercept_grouping(expr: &Expr) -> Option<Expr> {
+    match expr {
+        Expr::Binary { op: BinOp::Or, rhs, .. } => Some((**rhs).clone()),
+        _ => None,
+    }
+}
+
+/// Split a formula RHS into `(fixed_part, random_intercept_groupings)`.
+/// Each entry in the returned Vec is the grouping-factor expression of one
+/// random-intercept term. The fixed part is the RHS with all `(1|g)`
+/// subexpressions removed.
+fn split_random_effects(rhs: &Expr) -> (Expr, Vec<Expr>) {
+    match rhs {
+        // Direct: the entire RHS is a single `(1|group)` term.
+        expr if is_random_intercept(expr) => {
+            let group = random_intercept_grouping(expr).unwrap_or(Expr::NullLit);
+            (Expr::NullLit, vec![group])
+        }
+        Expr::Binary { op: BinOp::Add, lhs, rhs: r } => {
+            let (l_fixed, mut l_re) = split_random_effects(lhs);
+            let (r_fixed, mut r_re) = split_random_effects(r);
+            l_re.append(&mut r_re);
+            let l_null = matches!(l_fixed, Expr::NullLit);
+            let r_null = matches!(r_fixed, Expr::NullLit);
+            let combined = match (l_null, r_null) {
+                (true, true) => Expr::NullLit,
+                (true, false) => r_fixed,
+                (false, true) => l_fixed,
+                (false, false) => Expr::Binary {
+                    op: BinOp::Add,
+                    lhs: Box::new(l_fixed),
+                    rhs: Box::new(r_fixed),
+                },
+            };
+            (combined, l_re)
+        }
+        // Leaf or non-Add expression: not a random-effect spec.
+        other => (other.clone(), Vec::new()),
+    }
+}
+
 fn fmt_expr(e: &Expr) -> String {
     match e {
         Expr::Symbol(s) => s.to_string(),
@@ -1494,7 +1723,74 @@ fn val_to_str(v: &RVal) -> String { match v { RVal::Numeric(v,_) => v.iter().map
 // Phase R.2: bi_c moved to r2-data::concat. Engine adapter only.
 fn bi_c(_e: &mut Engine, args: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_data::concat::bi_c(args) }
 fn bi_length(_: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { Ok(rint(rval_length(&gv(a,0)) as i32)) }
-fn bi_print(_: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { let v = gv(a,0); println!("{}", v); Ok(v) }
+fn bi_print(_: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    let v = gv(a,0);
+    // Phase R.T.1 — class-aware print for Date / POSIXct. R prints these in
+    // human form (`"2024-03-15"`) rather than the raw days/seconds f64. We
+    // dispatch here instead of inside Display because the formatter lives in
+    // r2-stats and we don't want r2-types depending on r2-stats.
+    if let RVal::Numeric(xs, attrs) = &v {
+        match attrs.class.as_deref() {
+            Some("Date") => {
+                let strs: Vec<String> = xs.iter()
+                    .map(|x| match x { Some(d) => format!("\"{}\"", r2_stats::time::format_date(*d, "%Y-%m-%d")), None => "NA".into() })
+                    .collect();
+                println!("{}", quoted_vec(&strs));
+                return Ok(v);
+            }
+            Some("xts") => {
+                // R.T.3 — timestamped tabular print.
+                let dim = attrs.dim.as_ref();
+                let idx_v = attrs.custom.get(&std::sync::Arc::from("index"));
+                let cls_v = attrs.custom.get(&std::sync::Arc::from("index.class"));
+                if let (Some(d), Some(RVal::Numeric(idx, _)), Some(RVal::Character(cls, _))) = (dim, idx_v, cls_v) {
+                    if d.len() == 2 {
+                        let nrow = d[0];
+                        let ncol = d[1];
+                        let xs_vec: Vec<Option<f64>> = xs.iter().copied().collect();
+                        let idx_vec: Vec<f64> = idx.iter().map(|x| x.unwrap_or(f64::NAN)).collect();
+                        let cls_s = cls.first().and_then(|x| x.as_ref().map(|s| s.to_string())).unwrap_or_else(|| "POSIXct".into());
+                        print!("{}", r2_stats::time::format_xts(&xs_vec, nrow, ncol, &idx_vec, &cls_s, attrs.names.as_deref()));
+                        return Ok(v);
+                    }
+                }
+            }
+            Some("ts") => {
+                // R.T.2 — labeled monthly/quarterly grid via format_ts.
+                if let Some(RVal::Numeric(tsp, _)) = attrs.custom.get(&std::sync::Arc::from("tsp")) {
+                    if tsp.len() == 3 {
+                        let s = tsp[0].unwrap_or(f64::NAN);
+                        let e = tsp[1].unwrap_or(f64::NAN);
+                        let f = tsp[2].unwrap_or(1.0);
+                        let xs_vec: Vec<Option<f64>> = xs.iter().copied().collect();
+                        print!("{}", r2_stats::time::format_ts(&xs_vec, s, e, f));
+                        return Ok(v);
+                    }
+                }
+            }
+            Some("POSIXct") => {
+                let strs: Vec<String> = xs.iter()
+                    .map(|x| match x { Some(s) => format!("\"{}\"", r2_stats::time::format_posixct(*s, "%Y-%m-%d %H:%M:%S")), None => "NA".into() })
+                    .collect();
+                println!("{}", quoted_vec(&strs));
+                return Ok(v);
+            }
+            _ => {}
+        }
+    }
+    println!("{}", v);
+    Ok(v)
+}
+
+// R-style `[1] "a" "b"` formatter for vector of already-quoted strings.
+fn quoted_vec(strs: &[String]) -> String {
+    let mut s = String::from("[1] ");
+    for (i, x) in strs.iter().enumerate() {
+        if i > 0 { s.push(' '); }
+        s.push_str(x);
+    }
+    s
+}
 fn bi_cat(_: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { let sep = gn(a,"sep").map(|v| val_to_str(&v)).unwrap_or(" ".into()); let s: Vec<String> = a.iter().filter(|x| x.name.as_ref().map(|n| n.as_ref()) != Some("sep")).map(|x| val_to_str(&x.value)).collect(); print!("{}", s.join(&sep)); Ok(RVal::Null) }
 fn bi_typeof(_: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { Ok(rstr(gv(a,0).type_name())) }
 fn bi_class(_: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { match &gv(a,0) { RVal::TypeInstance(i) => Ok(rstr(&i.type_name)), v => Ok(rstr(v.type_name())) } }
@@ -1878,6 +2174,13 @@ fn bi_summary(e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> 
             Ok(RVal::Null)
         }
         RVal::TypeInstance(inst) => {
+            // Phase R.S.3 — `summary(lmer)` dispatches to the verbose
+            // R-style formatter (scaled residuals + variance/Std.Dev. columns
+            // + t-values + p-values + correlation matrix).
+            if inst.type_name.as_ref() == "lmer" {
+                r2_stats::mixed::format_lmer_summary(inst)?;
+                return Ok(RVal::Null);
+            }
             match inst.type_name.as_ref() {
                 "lm" | "glm" => {
                     // Show the captured original call (`lm(y ~ x, data = df)`)
@@ -2726,6 +3029,25 @@ fn try_reload_base(e: &mut Engine, name: &str) -> bool {
                 ("data",bi_data),
                 ("rowSums",bi_rowSums),("colSums",bi_colSums),("rowMeans",bi_rowMeans),("colMeans",bi_colMeans),
                 ("set.seed",bi_set_seed),("Sys.sleep",bi_Sys_sleep),("readline",bi_readline),
+                ("as.Date",bi_as_date),("as.POSIXct",bi_as_posixct),("format.Date",bi_format_time),
+                ("format.POSIXct",bi_format_time),("Sys.Date",bi_sys_date),("Sys.time",bi_sys_time),
+                ("difftime",bi_difftime),
+                ("ts",bi_ts),("tsp",bi_tsp),("start",bi_ts_start),("end",bi_ts_end),
+                ("frequency",bi_frequency),("deltat",bi_deltat),("time",bi_time_idx),
+                ("cycle",bi_cycle),("window",bi_window),("is.ts",bi_is_ts),
+                ("xts",bi_xts),("index",bi_index),("coredata",bi_coredata),("is.xts",bi_is_xts),
+                ("xts.subset",bi_xts_subset),("first",bi_first),("last",bi_last),
+                ("na.locf",bi_na_locf),("merge.xts",bi_merge_xts),
+                ("acf",bi_acf),("pacf",bi_pacf),("decompose",bi_decompose),
+                ("is.regular",bi_is_regular),("periodicity",bi_periodicity),
+                ("lag",bi_lag),("diff_ts",bi_diff_ts),
+                ("to.daily",bi_to_daily),("to.weekly",bi_to_weekly),
+                ("to.monthly",bi_to_monthly),("to.quarterly",bi_to_quarterly),
+                ("to.yearly",bi_to_yearly),
+                ("apply.daily",bi_apply_daily),("apply.weekly",bi_apply_weekly),
+                ("apply.monthly",bi_apply_monthly),("apply.quarterly",bi_apply_quarterly),
+                ("apply.yearly",bi_apply_yearly),
+                ("tithi",bi_tithi),("hindu.date",bi_hindu_date),("hnc.date",bi_hnc_date),
             ]));
             true
         }
@@ -2736,7 +3058,7 @@ fn try_reload_base(e: &mut Engine, name: &str) -> bool {
                 ("rnorm",bi_rnorm),("dnorm",bi_dnorm),("runif",bi_runif),("sample",bi_sample),
                 ("pnorm",bi_pnorm),("qnorm",bi_qnorm),("rbinom",bi_rbinom),("rpois",bi_rpois),
                 ("median",bi_median),("quantile",bi_quantile),
-                ("t.test",bi_t_test),("chisq.test",bi_chisq_test),
+                ("t.test",bi_t_test),("chisq.test",bi_chisq_test),("hotelling.test",bi_hotelling_test),("manova",bi_manova),("lmer",bi_lmer),
                 ("predict",bi_predict),("residuals",bi_residuals),("fitted",bi_fitted),("coef",bi_coef),
                 ("glm",bi_glm),("confint",bi_confint),("binomial",bi_binomial),("gaussian",bi_gaussian),("poisson",bi_poisson),("subset",bi_subset),("transform",bi_transform),
                 ("svd",bi_svd),("eigen",bi_eigen),("prcomp",bi_prcomp),
@@ -2783,6 +3105,13 @@ fn try_reload_base(e: &mut Engine, name: &str) -> bool {
 // function definitions, and registers them as a package layer.
 
 fn try_load_from_disk(e: &mut Engine, name: &str) -> Result<bool, R2Err> {
+    // Path A — r2-pkg standard layout: ~/.r2/packages/<name>/R/*.r2
+    if let Ok(pkg_root) = r2_pkg::pkg_dir(name) {
+        if pkg_root.is_dir() && pkg_root.join("package.r2").exists() {
+            return load_r2pkg_layout(e, name, &pkg_root);
+        }
+    }
+    // Path B — legacy layout: <lib_path>/<name>/R2/*.r
     for lib_path in &e.lib_paths.clone() {
         let pkg_dir = std::path::Path::new(lib_path).join(name);
         let r2_dir = pkg_dir.join("R2");
@@ -2863,6 +3192,91 @@ fn try_load_from_disk(e: &mut Engine, name: &str) -> Result<bool, R2Err> {
         return Ok(true);
     }
     Ok(false)
+}
+
+// Load a package laid out per the r2-pkg convention:
+//   <pkg_root>/package.r2      manifest (required)
+//   <pkg_root>/R/*.r2          source files, sourced alphabetically
+fn load_r2pkg_layout(e: &mut Engine, name: &str, pkg_root: &std::path::Path) -> Result<bool, R2Err> {
+    let manifest = r2_pkg::read_manifest(pkg_root)
+        .map_err(|e| R2Err { msg: format!("{}", e), kind: ErrKind::Runtime })?;
+    let files = r2_pkg::package_source_files(name)
+        .map_err(|e| R2Err { msg: format!("{}", e), kind: ErrKind::Runtime })?;
+
+    let mut all_source = String::new();
+    for f in &files {
+        match std::fs::read_to_string(f) {
+            Ok(c) => { all_source.push_str(&c); all_source.push('\n'); }
+            Err(err) => return err!(Runtime, "cannot read {}: {}", f.display(), err),
+        }
+    }
+    // Empty R/ dir is allowed for metadata-only packages, but library() of one
+    // would be a no-op — treat as an error so the user knows nothing happened.
+    if all_source.trim().is_empty() {
+        return err!(Runtime, "package '{}' has no .r2 source files under R/", name);
+    }
+
+    let stmts = r2_parser::Parser::parse(&all_source)
+        .map_err(|pe| R2Err { msg: format!("error parsing package '{}': {}", name, pe), kind: ErrKind::Runtime })?;
+
+    let before: Vec<Arc<str>> = e.global_env.bindings.keys().cloned().collect();
+    let env = e.global_env.clone();
+    for stmt in &stmts {
+        if let Err(err) = e.eval_in(stmt, &env) {
+            if err.kind != ErrKind::CtrlBreak && err.kind != ErrKind::CtrlNext {
+                eprintln!("Warning in package '{}': {}", name, err.msg);
+            }
+        }
+    }
+
+    // Determine exports: prefer the manifest's package_exports list if non-empty,
+    // otherwise fall back to "every new closure" so authors don't have to maintain
+    // the list while iterating.
+    let mut exports: Vec<String> = Vec::new();
+    if !manifest.exports.is_empty() {
+        for ex in &manifest.exports {
+            let key: Arc<str> = Arc::from(ex.as_str());
+            if matches!(e.global_env.bindings.get(&key), Some(RVal::Closure(_))) {
+                exports.push(ex.clone());
+            } else {
+                eprintln!("Warning: package '{}' exports '{}' but it was not defined in any R/ file", name, ex);
+            }
+        }
+    } else {
+        for (fname, fval) in &e.global_env.bindings {
+            if !before.contains(fname) && matches!(fval, RVal::Closure(_)) {
+                exports.push(fname.to_string());
+            }
+        }
+    }
+    if exports.is_empty() {
+        return err!(Runtime, "package '{}' defines no exported functions", name);
+    }
+    for ex in &exports {
+        if e.registry.is_core(ex) {
+            return err!(Runtime, "package '{}' cannot mask core function '{}'", name, ex);
+        }
+    }
+
+    let layer = PackageLayer {
+        name: name.to_string(),
+        tier: PackageTier::Addon,
+        functions: HashMap::new(),
+        exports: exports.clone(),
+    };
+    let masks = e.registry.check_masks(&exports);
+    for (func, from) in &masks {
+        e.warnings.push(format!("Warning: package '{}' masks '{}' from '{}'", name, func, from));
+    }
+    e.registry.add_layer(layer);
+    e.installed.insert(name.to_string(), InstalledPkgInfo {
+        name: name.to_string(),
+        version: manifest.version.clone(),
+        path: pkg_root.to_string_lossy().to_string(),
+        exports,
+        depends: Vec::new(),
+    });
+    Ok(true)
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -3521,6 +3935,379 @@ fn bi_t_test(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> 
 // ═══════════════════════════════════════════════════════════════════════
 
 fn bi_chisq_test(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::htest::bi_chisq_test(a) }
+
+// Phase R.S.2 — Hotelling T² (one-sample / two-sample / paired)
+fn bi_hotelling_test(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_stats::multivariate::bi_hotelling_test(a)
+}
+// Phase R.S.2 — MANOVA (multivariate analysis of variance)
+fn bi_manova(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_stats::multivariate::bi_manova(a)
+}
+// Phase R.S.3 — linear mixed-effects model (random intercept)
+fn bi_lmer(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_stats::mixed::bi_lmer(a)
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
+// Phase R.T.1 — Date / POSIXct builtins (thin engine adapters)
+// ═══════════════════════════════════════════════════════════════════════
+
+fn bi_as_date(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_stats::time::bi_as_date(a)
+}
+fn bi_as_posixct(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_stats::time::bi_as_posixct(a)
+}
+fn bi_format_time(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_stats::time::bi_format_time(a)
+}
+fn bi_sys_date(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_stats::time::bi_sys_date(a)
+}
+fn bi_sys_time(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_stats::time::bi_sys_time(a)
+}
+fn bi_difftime(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    r2_stats::time::bi_difftime(a)
+}
+// ── Phase R.T.2 — ts() class adapters ─────────────────────────────────
+fn bi_ts(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_ts(a) }
+fn bi_tsp(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_tsp(a) }
+fn bi_ts_start(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_start(a) }
+fn bi_ts_end(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_end(a) }
+fn bi_frequency(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_frequency(a) }
+fn bi_deltat(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_deltat(a) }
+fn bi_time_idx(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_time(a) }
+fn bi_cycle(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_cycle(a) }
+fn bi_window(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_window(a) }
+fn bi_is_ts(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_is_ts(a) }
+// ── Phase R.T.3 — xts adapters ────────────────────────────────────────
+fn bi_xts(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_xts(a) }
+fn bi_index(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_index(a) }
+fn bi_coredata(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_coredata(a) }
+fn bi_is_xts(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_is_xts(a) }
+fn bi_xts_subset(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_xts_subset(a) }
+fn bi_first(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_first(a) }
+fn bi_last(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_last(a) }
+fn bi_na_locf(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_na_locf(a) }
+fn bi_merge_xts(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_merge_xts(a) }
+// ── Phase R.T.4 — TS analytics ─────────────────────────────────────────
+fn bi_acf(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_acf(a) }
+fn bi_pacf(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_pacf(a) }
+fn bi_decompose(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_decompose(a) }
+fn bi_is_regular(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_is_regular(a) }
+fn bi_periodicity(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_periodicity(a) }
+fn bi_lag(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_lag(a) }
+fn bi_diff_ts(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_diff_ts(a) }
+// ── Phase R.T.5 — period aggregation ────────────────────────────────
+fn bi_to_daily(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_to_daily(a) }
+fn bi_to_weekly(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_to_weekly(a) }
+fn bi_to_monthly(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_to_monthly(a) }
+fn bi_to_quarterly(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_to_quarterly(a) }
+fn bi_to_yearly(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_to_yearly(a) }
+fn bi_apply_daily(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_apply_daily(a) }
+fn bi_apply_weekly(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_apply_weekly(a) }
+fn bi_apply_monthly(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_apply_monthly(a) }
+fn bi_apply_quarterly(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_apply_quarterly(a) }
+fn bi_apply_yearly(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_apply_yearly(a) }
+// ── Phase R.T.5b — Hindu calendar ───────────────────────────────────
+fn bi_tithi(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_tithi(a) }
+fn bi_hindu_date(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_hindu_date(a) }
+fn bi_hnc_date(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> { r2_stats::time::bi_hnc_date(a) }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Phase R.S.4 — Addon installers (r2-pkg backed)
+//
+// install.from.dir("path/to/pkg")
+//   Validates package.r2 manifest and copies into ~/.r2/packages/<name>/
+//
+// install.from.zip("path/to/pkg.zip")
+//   Extracts into a tmp dir then delegates to install_from_dir. Uses the
+//   system `unzip` (or `tar -xf` on Windows 10+) — no Rust zip dep.
+//
+// install.from.github("user/repo" [, ref="main"])
+//   Shells out to `git clone --depth 1` into a tmp dir, then installs.
+//
+// uninstall("name")
+//   Removes the package directory; library() of it afterwards will fail.
+// ═══════════════════════════════════════════════════════════════════════
+
+fn bi_install_from_dir(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    let path = match &gv(a, 0) {
+        RVal::Character(v, _) => v[0].as_ref().map(|s| s.to_string())
+            .ok_or(R2Err { msg: "NA path".into(), kind: ErrKind::Runtime })?,
+        _ => return err!(Runtime, "install.from.dir() needs a path (character string)"),
+    };
+    let m = r2_pkg::install_from_dir(std::path::Path::new(&path))
+        .map_err(|e| R2Err { msg: format!("{}", e), kind: ErrKind::Runtime })?;
+    println!("* installing package '{}' (version {}) from {}", m.name, m.version, path);
+    println!("* DONE — load with library(\"{}\")", m.name);
+    Ok(RVal::Null)
+}
+
+fn bi_install_from_zip(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    let zip_path = match &gv(a, 0) {
+        RVal::Character(v, _) => v[0].as_ref().map(|s| s.to_string())
+            .ok_or(R2Err { msg: "NA path".into(), kind: ErrKind::Runtime })?,
+        _ => return err!(Runtime, "install.from.zip() needs a zip path"),
+    };
+    let zip = std::path::Path::new(&zip_path);
+    if !zip.exists() {
+        return err!(Runtime, "zip file not found: {}", zip_path);
+    }
+    // Extract to a tmp directory using the platform's unzip/tar tool.
+    let tmp = std::env::temp_dir().join(format!("r2-install-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp)
+        .map_err(|e| R2Err { msg: format!("cannot create tmp dir: {}", e), kind: ErrKind::Runtime })?;
+
+    // Try `tar -xf` first (available on Windows 10+, macOS, Linux).
+    let status = std::process::Command::new("tar")
+        .arg("-xf").arg(zip)
+        .arg("-C").arg(&tmp)
+        .status();
+    if !matches!(&status, Ok(s) if s.success()) {
+        // Fall back to `unzip`.
+        let status2 = std::process::Command::new("unzip")
+            .arg("-q").arg(zip).arg("-d").arg(&tmp)
+            .status();
+        if !matches!(status2, Ok(s) if s.success()) {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return err!(Runtime, "could not extract '{}' — neither `tar` nor `unzip` succeeded. Install one or extract manually then use install.from.dir().", zip_path);
+        }
+    }
+
+    // Find the package root inside tmp (top-level dir containing package.r2,
+    // OR tmp itself if the zip was extracted flat).
+    let src_dir = find_pkg_root(&tmp)
+        .ok_or_else(|| R2Err { msg: format!("no package.r2 found inside '{}'", zip_path), kind: ErrKind::Runtime })?;
+
+    let m = r2_pkg::install_from_dir(&src_dir)
+        .map_err(|e| R2Err { msg: format!("{}", e), kind: ErrKind::Runtime })?;
+    let _ = std::fs::remove_dir_all(&tmp);
+    println!("* installing package '{}' (version {}) from {}", m.name, m.version, zip_path);
+    println!("* DONE — load with library(\"{}\")", m.name);
+    Ok(RVal::Null)
+}
+
+fn bi_install_from_github(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    let spec = match &gv(a, 0) {
+        RVal::Character(v, _) => v[0].as_ref().map(|s| s.to_string())
+            .ok_or(R2Err { msg: "NA repo".into(), kind: ErrKind::Runtime })?,
+        _ => return err!(Runtime, "install.from.github() needs a repo spec like \"user/repo\""),
+    };
+    // Optional ref="branch_or_tag" arg.
+    let git_ref: Option<String> = a.iter()
+        .find(|x| x.name.as_deref() == Some("ref"))
+        .and_then(|x| match &x.value {
+            RVal::Character(v, _) => v[0].as_ref().map(|s| s.to_string()),
+            _ => None,
+        });
+
+    let url = if spec.starts_with("http://") || spec.starts_with("https://") || spec.starts_with("git@") {
+        spec.clone()
+    } else if spec.contains('/') {
+        format!("https://github.com/{}.git", spec)
+    } else {
+        return err!(Runtime, "github spec must be \"user/repo\" or a full git URL; got '{}'", spec);
+    };
+
+    let tmp = std::env::temp_dir().join(format!("r2-gh-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("clone").arg("--depth").arg("1");
+    if let Some(r) = &git_ref {
+        cmd.arg("--branch").arg(r);
+    }
+    cmd.arg(&url).arg(&tmp);
+    let status = cmd.status()
+        .map_err(|e| R2Err { msg: format!("cannot run `git`: {}. Install git and put it on PATH.", e), kind: ErrKind::Runtime })?;
+    if !status.success() {
+        return err!(Runtime, "git clone failed for '{}'", url);
+    }
+
+    // Optional subdir = "r2pkg-foo" arg — for monorepos where many
+    // packages live under one repo (e.g. Ardon-R2-libraries).
+    let subdir: Option<String> = a.iter()
+        .find(|x| x.name.as_deref() == Some("subdir"))
+        .and_then(|x| match &x.value {
+            RVal::Character(v, _) => v[0].as_ref().map(|s| s.to_string()),
+            _ => None,
+        });
+
+    let search_root = match &subdir {
+        Some(s) => tmp.join(s),
+        None    => tmp.clone(),
+    };
+    if !search_root.exists() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return err!(Runtime, "subdir '{}' not found in cloned repo '{}'", subdir.unwrap_or_default(), spec);
+    }
+
+    let src_dir = find_pkg_root(&search_root)
+        .ok_or_else(|| R2Err { msg: format!("no package.r2 found in cloned repo '{}'{}", spec, subdir.as_ref().map(|s| format!(" subdir '{}'", s)).unwrap_or_default()), kind: ErrKind::Runtime })?;
+
+    let m = r2_pkg::install_from_dir(&src_dir)
+        .map_err(|e| R2Err { msg: format!("{}", e), kind: ErrKind::Runtime })?;
+    let _ = std::fs::remove_dir_all(&tmp);
+    let from_str = match subdir { Some(s) => format!("github:{}/{}", spec, s), None => format!("github:{}", spec) };
+    println!("* installing package '{}' (version {}) from {}", m.name, m.version, from_str);
+    println!("* DONE — load with library(\"{}\")", m.name);
+    Ok(RVal::Null)
+}
+
+fn bi_uninstall(_e: &mut Engine, a: &[EvalArg], _: &EnvRef) -> Result<RVal, R2Err> {
+    let name = match &gv(a, 0) {
+        RVal::Character(v, _) => v[0].as_ref().map(|s| s.to_string())
+            .ok_or(R2Err { msg: "NA package name".into(), kind: ErrKind::Runtime })?,
+        _ => return err!(Runtime, "uninstall() needs a package name"),
+    };
+    r2_pkg::uninstall(&name)
+        .map_err(|e| R2Err { msg: format!("{}", e), kind: ErrKind::Runtime })?;
+    println!("* removed package '{}'", name);
+    Ok(RVal::Null)
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Unified `install.packages()` dispatcher
+//
+// One entry point that auto-detects the install source from the `path`
+// argument. Mirrors R's `install.packages()` for muscle memory, and
+// future-compatible with a website-based registry.
+//
+// Signature:
+//   install.packages(name, path = NULL, subdir = NULL, ref = NULL)
+//
+// `path` dispatch rules (checked in order):
+//
+//   1. NULL / omitted        → registry lookup (not yet implemented;
+//                              returns an informative error pointing
+//                              at the future r2-packages.dev endpoint)
+//   2. ends with ".zip"      → local zip extract → install
+//                              (or download-then-extract if it's a URL)
+//   3. "user/repo[/subdir]"  → github shorthand: clone, then install
+//                              (a single `/`, no path separator, no
+//                              backslash, no dot before the slash)
+//   4. starts with "http://" or "https://" or "git@" or ends ".git"
+//                            → git clone or URL download
+//   5. an existing directory → install.from.dir
+//
+// `name` is the expected package name; after extracting/cloning we
+// verify it matches the manifest's `package_name` and warn on mismatch.
+// `subdir` (optional) — for monorepos like Ardon-R2-libraries.
+// `ref`    (optional) — branch/tag for GitHub installs.
+// ═══════════════════════════════════════════════════════════════════════
+
+fn bi_install_packages(e: &mut Engine, a: &[EvalArg], env: &EnvRef) -> Result<RVal, R2Err> {
+    let name = match &gv(a, 0) {
+        RVal::Character(v, _) => v[0].as_ref().map(|s| s.to_string())
+            .ok_or(R2Err { msg: "NA package name".into(), kind: ErrKind::Runtime })?,
+        _ => return err!(Runtime, "install.packages() needs a package name (character string)"),
+    };
+    let path: Option<String> = a.iter()
+        .find(|x| x.name.as_deref() == Some("path"))
+        .and_then(|x| match &x.value {
+            RVal::Character(v, _) => v[0].as_ref().map(|s| s.to_string()),
+            _ => None,
+        });
+
+    let path = match path {
+        Some(p) => p,
+        None => {
+            return err!(Runtime,
+                "install.packages('{}') without 'path' would consult the R2 registry, \
+                 which is not yet online. Until then, supply path = ... pointing to: \
+                 \n  - a local directory:        path = 'path/to/pkg-dir'\
+                 \n  - a local zip file:         path = 'path/to/pkg.zip'\
+                 \n  - a GitHub repo:            path = 'user/repo'\
+                 \n  - a monorepo subdir:        path = 'user/repo', subdir = 'r2pkg-foo'\
+                 \n  - a specific branch/tag:    path = 'user/repo', ref = 'v0.1.0'", name);
+        }
+    };
+
+    // Classify the path. Order matters: zip before github-shorthand
+    // (since "foo/bar.zip" contains a slash too).
+    let is_url   = path.starts_with("http://") || path.starts_with("https://");
+    let is_zip   = path.to_lowercase().ends_with(".zip");
+    let is_git   = path.starts_with("git@") || path.ends_with(".git");
+    let is_dir   = std::path::Path::new(&path).is_dir();
+    // GitHub shorthand: one slash, no backslash, no path-separator
+    // characters past the slash, and the part before the slash has no
+    // dots (would otherwise look like a domain).
+    let is_github_shorthand = {
+        let p = path.trim_end_matches('/');
+        let slashes: Vec<usize> = p.match_indices('/').map(|(i, _)| i).collect();
+        !is_url && !is_git && !is_zip && !is_dir &&
+            slashes.len() >= 1 && !p.contains('\\') &&
+            !p[..slashes[0]].contains('.')
+    };
+
+    // Build a faux EvalArg list to call our existing helpers.
+    let make_arg = |val: RVal| EvalArg { name: None, value: val };
+
+    if is_dir {
+        let m = r2_pkg::install_from_dir(std::path::Path::new(&path))
+            .map_err(|e| R2Err { msg: format!("{}", e), kind: ErrKind::Runtime })?;
+        verify_name(&m.name, &name);
+        println!("* installed '{}' (version {}) from local dir {}", m.name, m.version, path);
+        return Ok(RVal::Null);
+    }
+
+    if is_zip {
+        // Existing handler accepts a local path. URL-zip support would
+        // need a download step; for now we error if the user passed a URL.
+        if is_url {
+            return err!(Runtime, "install.packages(): downloading remote .zip is not yet supported. \
+                Download manually then pass the local path.");
+        }
+        let zip_args = vec![make_arg(RVal::Character(vec![Some(std::sync::Arc::from(path.as_str()))], Attrs::default()))];
+        return bi_install_from_zip(e, &zip_args, env);
+    }
+
+    if is_github_shorthand || is_git || is_url {
+        // Reuse install.from.github for the heavy lifting. Pass through
+        // subdir and ref if present.
+        let mut gh_args = vec![make_arg(RVal::Character(vec![Some(std::sync::Arc::from(path.as_str()))], Attrs::default()))];
+        for arg_name in &["ref", "subdir"] {
+            if let Some(x) = a.iter().find(|x| x.name.as_deref() == Some(*arg_name)) {
+                gh_args.push(EvalArg { name: Some(std::sync::Arc::from(*arg_name)), value: x.value.clone() });
+            }
+        }
+        return bi_install_from_github(e, &gh_args, env);
+    }
+
+    err!(Runtime,
+        "install.packages(): could not classify path '{}'. Expected one of:\
+         \n  - existing local directory\
+         \n  - .zip file\
+         \n  - GitHub shorthand 'user/repo'\
+         \n  - full URL (https://... or git@...)", path)
+}
+
+fn verify_name(manifest_name: &str, requested_name: &str) {
+    if manifest_name != requested_name {
+        eprintln!(
+            "Warning: package name mismatch — you asked for '{}' but the manifest \
+             says '{}'. Installed under '{}'.",
+            requested_name, manifest_name, manifest_name);
+    }
+}
+
+// Search up to 2 levels deep for a directory containing package.r2.
+fn find_pkg_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    if start.join("package.r2").exists() { return Some(start.to_path_buf()); }
+    if let Ok(entries) = std::fs::read_dir(start) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() && p.join("package.r2").exists() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
 
 // Phase R.10: chi_sq_cdf and ln_gamma moved to r2_stats. No engine callers remain.
 

@@ -25,6 +25,9 @@ pub mod summary;
 pub mod htest;
 pub mod models;
 pub mod rng;
+pub mod multivariate;
+pub mod mixed;
+pub mod time;
 
 // Re-export numerical helpers for engine-side callers (model summaries
 // like lm/glm still print inline using these).

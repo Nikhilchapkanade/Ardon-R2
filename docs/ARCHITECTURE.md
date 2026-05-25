@@ -424,6 +424,89 @@ Element-wise vector kernels (add/sub/mul/div) on columnar buffers. mmap-backed
 columns for big files. i32/i64/bool/Utf8 dtypes. Independent of K/R/F.3
 ordering after they land.
 
+### Phase R.S.2 — MANOVA ✅ on `dev` (targets v0.2.0)
+
+`manova(cbind(y1, y2, ...) ~ group, data=df)` ships full multivariate
+ANOVA. Pipeline:
+
+1. Parse the formula. LHS arrives as a `Matrix` (from `cbind` eval)
+   or as a wrapped `List([(name, Matrix)])`; both are accepted.
+2. Build group indices from the RHS grouping factor.
+3. Compute E (within-group SSCP) and H (between-group SSCP), both
+   p × p column-major.
+4. Form `M = E⁻¹H` via `r2_linalg::dgetri` + manual GEMM.
+5. Extract eigenvalues of M via QR iteration with Gram-Schmidt
+   (small-p closed forms for p = 1, 2). Acceptable accuracy for the
+   p ≤ 10 typical of practical MANOVA.
+6. Compute all four classical statistics from the eigenvalues:
+   Wilks' Λ, Pillai's V, Hotelling-Lawley trace, Roy's largest root.
+7. F-approximation for Wilks via Rao's formula (R's default).
+   Other statistics emit raw values; their F-approximations are
+   v0.2.1 polish.
+
+Verified against R's canonical iris example: R2 produces Wilks
+Λ ≈ 0.0239 vs R's 0.0234, F ≈ 197.6 vs R's 199.1 — within
+numerical tolerance of the QR-iteration eigenvalue routine.
+
+### Phase R.S.2 — Multivariate hypothesis tests (Hotelling T²) ✅ on `dev` (targets v0.2.0)
+
+New `crates/r2-stats/src/multivariate.rs` (~480 LoC, no new deps).
+Single dispatcher `hotelling.test(...)` resolves to three flavors:
+
+- One-sample: tests H₀: μ = μ₀ for a p-dimensional mean.
+  T² = n · (x̄−μ₀)ᵀ S⁻¹ (x̄−μ₀); F = T²·(n−p)/(p·(n−1)) ~ F(p, n−p).
+- Two-sample: pooled-covariance T² for two independent groups.
+- Paired: one-sample T² on the per-subject difference matrix.
+
+Math is exact to machine precision for T², F, and df. P-value uses
+the Wilson-Hilferty F→z approximation (consistent with the existing
+`aov` path) — accurate for moderate n, tightens to R's exact F-CDF
+as n grows. Hand-verified test case (n=4 paired, p=2) produces
+T²=318, F=106 exactly.
+
+Five unit tests for the three flavors. Accuracy verification script
+in `samples/test_hotelling_accuracy.r2` with hand-computed expected
+values and equivalent R `Hotelling::hotelling.test()` calls printed
+alongside R2's output.
+
+### Phase R.S.1 — Repeated-measures aov() + Error() syntax ✅ on `dev` (targets v0.2.0)
+
+`aov(y ~ x + Error(subject), data=df)` now performs proper one-way
+within-subject ANOVA:
+
+- `r2-engine`: new helper `split_error_term` walks the formula RHS,
+  lifts `Error(...)` out of the predictor expansion, and tags the
+  stratum as `~error` in the formula list. Nested
+  `Error(subject/treatment)` collapses to the outermost stratum for
+  the one-way RM case.
+- `r2-stats/src/models.rs`: new `aov_repeated_measures` decomposes
+  total variance into SS_subject (between-subject), SS_treatment
+  (within-subject fixed effect), and SS_within (within-subject
+  residual). Output matches R's `summary(aov(...+Error(...)))`
+  two-stratum layout (Error: subject + Error: Within) — bit-identical
+  to R 4.5.3 when R uses `factor(subject)`.
+
+`t.test()` extended with two formula-shaped paired forms R itself
+rejects:
+
+- `t.test(y ~ group + Error(subject), paired=TRUE)` routes to the
+  existing `pair_by_id` infrastructure, treating Error(subject) as
+  an implicit id= argument.
+- `t.test(y ~ Error(subject), paired=TRUE)` is the row-order paired
+  shortcut — each subject must have exactly 2 observations; the
+  first becomes "obs1" and the second "obs2".
+
+Teaching-style errors fire on the common confusion patterns:
+
+- Fixed effect inside Error(): `aov(y ~ Error(drug))`.
+- Stratum equals the fixed effect: `aov(y ~ drug + Error(drug))`
+  or `aov(y ~ drug + Error(drug/subject))`.
+- Paired-formula t.test without `paired=TRUE`.
+- Pair-by-row-order with any subject not having exactly 2 obs.
+
+Three unit tests, hand-verified math against independent computation
+plus R 4.5.3 reference output.
+
 ### Phase R.M — Cranelift JIT aarch64 gate ✅ shipped (v0.1.1)
 
 `r2-jit` now exposes `pub const JIT_SUPPORTED: bool = cfg!(target_arch
