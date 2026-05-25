@@ -26,3 +26,6 @@ resvg     = { version = "0.45", default-features = false, features = ["text", "s
 tiny-skia = "0.11"
 usvg      = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
 rfd       = "0.14"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

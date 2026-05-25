@@ -1,3 +1,10 @@
+// On Windows, suppress the black console window that would otherwise flash
+// when R2Gui.exe is launched from Explorer or the Start Menu. Without this
+// attribute, Windows attaches a default console to the process — fine for a
+// CLI app (r2.exe) but inappropriate for a GUI app. Debug builds keep the
+// console so println!/eprintln! still surface during development.
+#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+
 //! Ardon-R2 desktop GUI — egui/eframe-based standalone application.
 //!
 //! Single-window layout (RGui-inspired):
