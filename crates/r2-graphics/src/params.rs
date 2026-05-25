@@ -244,7 +244,14 @@ pub fn bi_dev_view(_a: &[EvalArg]) -> Result<RVal, R2Err> {
     }
 }
 
-/// `save_plot(path)` builtin — flush current device contents to a file.
+/// `save.plot(file, width=800, height=600)` — flush current device
+/// contents to a file. Extension drives the format:
+///
+///   * `*.svg` → vector SVG (resolution-independent, best for editing).
+///   * `*.png` → rasterized PNG (best for embedding in docs / chat /
+///               slides — most apps don't render SVG).
+///
+/// `width` and `height` are pixels and only affect PNG; SVG ignores them.
 pub fn bi_save_plot(a: &[EvalArg]) -> Result<RVal, R2Err> {
     let path = match gv(a, 0) {
         RVal::Character(v, _) => v.first().and_then(|x| x.as_ref()).map(|s| s.to_string()),
@@ -252,14 +259,24 @@ pub fn bi_save_plot(a: &[EvalArg]) -> Result<RVal, R2Err> {
     }
     .or_else(|| gn(a, "file").map(|v| val_to_str(&v)))
     .ok_or_else(|| R2Err {
-        msg: "save_plot(): path argument required".into(),
+        msg: "save.plot(): path argument required".into(),
         kind: ErrKind::Runtime,
     })?;
-    crate::device::save_to_file(&path).map_err(|e| R2Err {
-        msg: format!("save_plot(): {}", e),
-        kind: ErrKind::Runtime,
-    })?;
-    Ok(RVal::Character(vec![Some(Arc::from(path.as_str()))], Attrs::default()))
+    let width: u32 = gn(a, "width").and_then(|v| match v {
+        RVal::Numeric(vs, _) => vs.first().and_then(|x| *x).map(|x| x as u32),
+        RVal::Integer(vs, _) => vs.first().and_then(|x| *x).map(|x| x as u32),
+        _ => None,
+    }).unwrap_or(800);
+    let height: u32 = gn(a, "height").and_then(|v| match v {
+        RVal::Numeric(vs, _) => vs.first().and_then(|x| *x).map(|x| x as u32),
+        RVal::Integer(vs, _) => vs.first().and_then(|x| *x).map(|x| x as u32),
+        _ => None,
+    }).unwrap_or(600);
+    let abs = crate::device::save_plot(&path, width, height)?;
+    let display = abs.to_string_lossy();
+    let clean = display.strip_prefix(r"\\?\").unwrap_or(&display);
+    println!("Plot saved to {}", clean);
+    Ok(RVal::Character(vec![Some(Arc::from(clean))], Attrs::default()))
 }
 
 #[cfg(test)]

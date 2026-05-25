@@ -317,6 +317,7 @@ impl Engine {
         ]));
         e.registry.add_layer(mkpkg("graphics", PackageTier::Base, vec![
             ("plot",bi_plot),("hist",bi_hist),("boxplot",bi_boxplot),("barplot",bi_barplot),
+            ("save.plot",bi_save_plot),
             ("lines",bi_lines),("points",bi_points),("abline",bi_abline),("legend",bi_legend),
             ("par",bi_par),("dev.off",bi_dev_off),("save_plot",bi_save_plot),("dev.view",bi_dev_view),
         ]));
@@ -3070,6 +3071,7 @@ fn try_reload_base(e: &mut Engine, name: &str) -> bool {
         "graphics" => {
             e.registry.add_layer(mkpkg("graphics", PackageTier::Base, vec![
                 ("plot",bi_plot),("hist",bi_hist),("boxplot",bi_boxplot),("barplot",bi_barplot),
+            ("save.plot",bi_save_plot),
                 ("lines",bi_lines),("points",bi_points),("abline",bi_abline),("legend",bi_legend),
                 ("par",bi_par),("dev.off",bi_dev_off),("save_plot",bi_save_plot),("dev.view",bi_dev_view),
             ]));

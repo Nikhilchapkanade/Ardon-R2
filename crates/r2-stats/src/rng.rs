@@ -28,6 +28,29 @@ fn arg_named(a: &[EvalArg], name: &str) -> Option<RVal> {
     a.iter().find(|x| x.name.as_ref().map(|n| n.as_ref()) == Some(name)).map(|x| x.value.clone())
 }
 
+// First positional (unnamed) argument. Use this when the user might pass
+// the parameter either positionally OR by name — e.g. `rnorm(100)` vs
+// `rnorm(n = 100, mean = 10)`. With plain `first(a)`, a named argument
+// passed first ate the positional slot and produced wrong results.
+#[inline]
+fn first_positional(a: &[EvalArg]) -> RVal {
+    a.iter()
+        .find(|x| x.name.is_none())
+        .map(|x| x.value.clone())
+        .unwrap_or(RVal::Null)
+}
+
+// Resolve `n` for distribution builtins R-style: named `n=` wins, else
+// the first positional argument.
+#[inline]
+fn resolve_n(a: &[EvalArg], default: usize) -> Result<usize, R2Err> {
+    if let Some(v) = arg_named(a, "n") {
+        if let Some(x) = v.scalar_f64()? { return Ok(x as usize); }
+    }
+    if let Some(x) = first_positional(a).scalar_f64()? { return Ok(x as usize); }
+    Ok(default)
+}
+
 const MAX_ALLOC_BYTES: usize = 500_000_000;
 fn check_alloc(elements: usize, elem_size: usize) -> Result<(), R2Err> {
     let bytes = elements.saturating_mul(elem_size);
@@ -76,7 +99,7 @@ pub fn parallel_random(seed: &mut u64) -> f64 {
 // ── Random-variate builtins ─────────────────────────────────────────
 
 pub fn bi_rnorm(a: &[EvalArg]) -> Result<RVal, R2Err> {
-    let n = first(a).scalar_f64()?.unwrap_or(1.0) as usize;
+    let n = resolve_n(a, 1)?;
     let mean = arg_named(a, "mean").and_then(|v| v.scalar_f64().ok().flatten()).unwrap_or(0.0);
     let sd = arg_named(a, "sd").and_then(|v| v.scalar_f64().ok().flatten()).unwrap_or(1.0);
     check_alloc(n, 8)?;
@@ -96,7 +119,7 @@ pub fn bi_rnorm(a: &[EvalArg]) -> Result<RVal, R2Err> {
 }
 
 pub fn bi_runif(a: &[EvalArg]) -> Result<RVal, R2Err> {
-    let n = first(a).scalar_f64()?.unwrap_or(1.0) as usize;
+    let n = resolve_n(a, 1)?;
     let min = arg_named(a, "min").and_then(|v| v.scalar_f64().ok().flatten()).unwrap_or(0.0);
     let max = arg_named(a, "max").and_then(|v| v.scalar_f64().ok().flatten()).unwrap_or(1.0);
     check_alloc(n, 8)?;
@@ -131,7 +154,7 @@ pub fn bi_sample(a: &[EvalArg]) -> Result<RVal, R2Err> {
 }
 
 pub fn bi_rbinom(a: &[EvalArg]) -> Result<RVal, R2Err> {
-    let n = first(a).scalar_f64()?.unwrap_or(1.0) as usize;
+    let n = resolve_n(a, 1)?;
     let size = arg_named(a, "size").and_then(|v| v.scalar_f64().ok().flatten()).unwrap_or(1.0) as usize;
     let prob = arg_named(a, "prob").and_then(|v| v.scalar_f64().ok().flatten()).unwrap_or(0.5);
     let mut results: Vec<Integer> = Vec::with_capacity(n);
@@ -146,7 +169,7 @@ pub fn bi_rbinom(a: &[EvalArg]) -> Result<RVal, R2Err> {
 }
 
 pub fn bi_rpois(a: &[EvalArg]) -> Result<RVal, R2Err> {
-    let n = first(a).scalar_f64()?.unwrap_or(1.0) as usize;
+    let n = resolve_n(a, 1)?;
     let lambda = arg_named(a, "lambda").and_then(|v| v.scalar_f64().ok().flatten()).unwrap_or(1.0);
     let mut results: Vec<Integer> = Vec::with_capacity(n);
     for _ in 0..n {

@@ -4,3 +4,11 @@ version = "0.1.1"
 edition = "2021"
 [dependencies]
 r2-types = { path = "../r2-types" }
+# resvg = pure-Rust SVG → PNG rasterizer. Used by save_plot() when the
+# user requests a .png extension. ~600 KB added to the release binary
+# after LTO — acceptable for the convenience of PNG output without
+# any system dependency on librsvg/Inkscape/ImageMagick.
+resvg     = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
+tiny-skia = "0.11"
+usvg      = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
+fontdb    = "0.23"

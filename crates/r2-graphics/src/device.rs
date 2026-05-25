@@ -205,6 +205,51 @@ pub fn save_to_file(path: &str) -> Result<(), std::io::Error> {
     std::fs::write(path, svg)
 }
 
+/// Rasterize the current SVG plot to a PNG file. Uses resvg under the
+/// hood — pure Rust, no external dependencies. Renders at the device's
+/// own pixel dimensions; the user can scale by passing different
+/// width/height via the `png()` device builtin.
+pub fn save_to_png(path: &str, target_w: u32, target_h: u32) -> Result<(), R2Err> {
+    let svg = DEVICE.with(|d| d.borrow().full_svg());
+    let mut opt = usvg::Options::default();
+    // Load system fonts so axis labels, titles, and legend text render.
+    // Without this, resvg silently drops every <text> node.
+    opt.fontdb_mut().load_system_fonts();
+    let tree = usvg::Tree::from_str(&svg, &opt)
+        .map_err(|e| R2Err { msg: format!("svg→png: parse failed: {}", e), kind: ErrKind::Runtime })?;
+    let mut pixmap = tiny_skia::Pixmap::new(target_w, target_h)
+        .ok_or_else(|| R2Err { msg: format!("svg→png: cannot allocate {}×{} pixmap", target_w, target_h), kind: ErrKind::Runtime })?;
+    // Compute the scale that fits the SVG into the target box.
+    let svg_size = tree.size();
+    let sx = target_w as f32 / svg_size.width();
+    let sy = target_h as f32 / svg_size.height();
+    let scale = sx.min(sy);
+    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    pixmap.save_png(path)
+        .map_err(|e| R2Err { msg: format!("svg→png: write failed: {}", e), kind: ErrKind::Runtime })
+}
+
+/// Dispatch on file extension: `.svg` → save_to_file, `.png` → save_to_png.
+/// Returns the absolute (canonicalized) path so the caller can echo it.
+pub fn save_plot(path: &str, width: u32, height: u32) -> Result<std::path::PathBuf, R2Err> {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".svg") {
+        save_to_file(path).map_err(|e| R2Err {
+            msg: format!("could not write {}: {}", path, e),
+            kind: ErrKind::Runtime,
+        })?;
+    } else if lower.ends_with(".png") {
+        save_to_png(path, width, height)?;
+    } else {
+        return Err(R2Err {
+            msg: format!("save_plot(): unsupported extension in '{}'. Use .svg or .png.", path),
+            kind: ErrKind::Runtime,
+        });
+    }
+    Ok(std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path)))
+}
+
 /// `dev.off()` equivalent — close the device and reset to default.
 pub fn dev_off() {
     DEVICE.with(|d| *d.borrow_mut() = PlotDevice::default());

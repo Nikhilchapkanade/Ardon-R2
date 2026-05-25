@@ -104,10 +104,26 @@ pub fn bi_plot(a: &[EvalArg]) -> Result<RVal, R2Err> {
     with_device(|d| d.svg_body.push_str(&frag));
 
     // Auto-flush to preserve the legacy "plot()  produces plot.svg" UX.
+    // Print the absolute path so the user knows where to find it — the
+    // default cwd is the user's Documents folder (R-style), not the
+    // .exe's install dir, so the file lands somewhere they can actually
+    // see in Explorer.
     let path = "plot.svg";
     let _ = save_to_file(path);
-    println!("Plot saved to {}", path);
+    print_save_path(path);
     Ok(rstr(path))
+}
+
+fn print_save_path(rel: &str) {
+    match std::fs::canonicalize(rel) {
+        Ok(abs) => {
+            let display = abs.to_string_lossy();
+            // Strip Windows \\?\ prefix that canonicalize adds.
+            let clean = display.strip_prefix(r"\\?\").unwrap_or(&display);
+            println!("Plot saved to {}", clean);
+        }
+        Err(_) => println!("Plot saved to {}", rel),
+    }
 }
 
 /// `hist(x, breaks=, main=)` — text + SVG histogram into the device.
@@ -167,6 +183,7 @@ pub fn bi_hist(a: &[EvalArg]) -> Result<RVal, R2Err> {
 
     with_device(|d| d.svg_body.push_str(&frag));
     let _ = save_to_file("hist.svg");
+    print_save_path("hist.svg");
 
     let _ = mb;
     Ok(RVal::Null)
@@ -232,7 +249,7 @@ pub fn bi_boxplot(a: &[EvalArg]) -> Result<RVal, R2Err> {
 
     with_device(|d| d.svg_body.push_str(&frag));
     let _ = save_to_file("boxplot.svg");
-    println!("Boxplot saved to boxplot.svg");
+    print_save_path("boxplot.svg");
     Ok(RVal::Null)
 }
 
@@ -286,7 +303,7 @@ pub fn bi_barplot(a: &[EvalArg]) -> Result<RVal, R2Err> {
 
     with_device(|d| d.svg_body.push_str(&frag));
     let _ = save_to_file("barplot.svg");
-    println!("Barplot saved to barplot.svg");
+    print_save_path("barplot.svg");
     Ok(RVal::Null)
 }
 
