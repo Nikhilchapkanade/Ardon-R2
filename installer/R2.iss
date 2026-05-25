@@ -51,9 +51,8 @@ Name: "addtopath";     Description: "Add R2 to the system &PATH (so `r2` works i
 Name: "associate_r2";  Description: "&Associate .r2 files with Ardon-R2"; GroupDescription: "File associations:"; Flags: unchecked
 
 [Files]
-; The compiled release binaries.
-Source: "..\target\release\r2.exe";    DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\R2Gui.exe"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+; The compiled release binary.
+Source: "..\target\release\r2.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Documentation.
 Source: "..\README.md";                  DestDir: "{app}\docs"; Flags: ignoreversion skipifsourcedoesntexist
@@ -69,13 +68,9 @@ Source: "..\docs\KNOWN_LIMITATIONS.md";  DestDir: "{app}\docs"; Flags: ignorever
 Source: "..\samples\*.r2"; DestDir: "{app}\samples"; Flags: ignoreversion recursesubdirs
 
 [Icons]
-; GUI version — what most users will launch.
-Name: "{group}\Ardon-R2 (GUI)";       Filename: "{app}\R2Gui.exe"
-; CLI version — for scripts, automation, SSH.
-Name: "{group}\Ardon-R2 (Console)";   Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}";         Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-; Desktop shortcut launches the GUI by default.
-Name: "{autodesktop}\{#MyAppName}";   Filename: "{app}\R2Gui.exe"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}";   Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
 ; .r2 file association (if user opts in).
