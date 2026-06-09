@@ -124,6 +124,7 @@ impl R2Ui {
                 self.initial_size.1 as f64,
             ))
             .with_min_inner_size(winit::dpi::LogicalSize::new(600.0, 360.0))
+            .with_maximized(true)
             .build(&event_loop)
             .map_err(|e| format!("WindowBuilder::build: {}", e))?;
 

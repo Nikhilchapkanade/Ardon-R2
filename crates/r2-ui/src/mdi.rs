@@ -135,7 +135,14 @@ impl MdiHost {
     pub fn window_mut(&mut self, id: WindowId) -> Option<&mut SubWindow> {
         self.windows.iter_mut().find(|w| w.id == id)
     }
-    pub fn set_workspace(&mut self, rect: Rect) { self.workspace = rect; }
+    pub fn set_workspace(&mut self, rect: Rect) {
+        self.workspace = rect;
+        for w in &mut self.windows {
+            if w.maximized {
+                w.bounds = rect;
+            }
+        }
+    }
 
     /// Returns `true` (once) if the user clicked the close button on
     /// the given window since the last call. Self-clearing.
@@ -357,15 +364,24 @@ impl MdiHost {
     /// their title strips do not leak on top of the maximized
     /// window. Otherwise every visible window in z-order shows.
     fn paint_targets(&self) -> Vec<WindowId> {
-        if let Some(mid) = self.windows.iter()
-            .find(|w| w.maximized && w.visible)
-            .map(|w| w.id)
-        {
-            return vec![mid];
+        let mut topmost_maximized_idx = None;
+        for (idx, id) in self.z_order.iter().enumerate().rev() {
+            if let Some(w) = self.window(*id) {
+                if w.maximized && w.visible {
+                    topmost_maximized_idx = Some(idx);
+                    break;
+                }
+            }
         }
-        self.z_order.iter().copied()
-            .filter(|id| self.window(*id).map(|w| w.visible).unwrap_or(false))
-            .collect()
+        if let Some(max_idx) = topmost_maximized_idx {
+            self.z_order[max_idx..].iter().copied()
+                .filter(|id| self.window(*id).map(|w| w.visible).unwrap_or(false))
+                .collect()
+        } else {
+            self.z_order.iter().copied()
+                .filter(|id| self.window(*id).map(|w| w.visible).unwrap_or(false))
+                .collect()
+        }
     }
 
     /// Whether the caller should paint per-window content (transcript,

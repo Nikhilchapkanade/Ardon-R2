@@ -210,6 +210,10 @@ fn main() -> Result<(), String> {
     // close to square.
     let console_id  = mdi.borrow_mut().add_window("R2 Console",
         Rect { x: 24.0, y: 36.0, w: 640.0, h: 440.0 });
+    if let Some(w) = mdi.borrow_mut().window_mut(console_id) {
+        w.maximized = true;
+        w.saved_bounds = Some(w.bounds);
+    }
     // Graphics windows are created lazily — one per `dev.new()` (or
     // the auto-created device-1 on the first plot). Map keyed by
     // engine-side DeviceId so events round-trip cleanly.
