@@ -7,13 +7,7 @@
 **/target/
 **/*.rs.bk
 
-# NOTE: Cargo.lock IS committed. R2 ships a binary (the `r2` REPL), so
-# the Rust convention is to commit Cargo.lock for reproducible builds
-# across CI and downstream users. Do not add it to this ignore list.
 
-# Compiled binaries and shared libs (only top-level outputs; crate-level
-# stays under target/ which is already ignored above)
-/*.exe
 /*.dll
 /*.so
 /*.dylib
